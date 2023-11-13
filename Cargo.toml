@@ -1,0 +1,8 @@
+[package]
+name = "nlookup"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+neptune = "8.1.0"
+bellperson = { version = "0.24", default-features = false }
