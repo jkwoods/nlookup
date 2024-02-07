@@ -1,0 +1,146 @@
+Enabling ADX because it was detected on the host
+TARGET = Some("x86_64-apple-darwin")
+OPT_LEVEL = Some("0")
+HOST = Some("x86_64-apple-darwin")
+cargo:rerun-if-env-changed=CXX_x86_64-apple-darwin
+CXX_x86_64-apple-darwin = None
+cargo:rerun-if-env-changed=CXX_x86_64_apple_darwin
+CXX_x86_64_apple_darwin = None
+cargo:rerun-if-env-changed=HOST_CXX
+HOST_CXX = None
+cargo:rerun-if-env-changed=CXX
+CXX = None
+cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+CRATE_CC_NO_DEFAULTS = None
+DEBUG = Some("true")
+CARGO_CFG_TARGET_FEATURE = Some("cmpxchg16b,fxsr,sse,sse2,sse3,ssse3")
+cargo:rerun-if-env-changed=CXXFLAGS_x86_64-apple-darwin
+CXXFLAGS_x86_64-apple-darwin = None
+cargo:rerun-if-env-changed=CXXFLAGS_x86_64_apple_darwin
+CXXFLAGS_x86_64_apple_darwin = None
+cargo:rerun-if-env-changed=HOST_CXXFLAGS
+HOST_CXXFLAGS = None
+cargo:rerun-if-env-changed=CXXFLAGS
+CXXFLAGS = None
+cargo:rerun-if-env-changed=CXX_x86_64-apple-darwin
+CXX_x86_64-apple-darwin = None
+cargo:rerun-if-env-changed=CXX_x86_64_apple_darwin
+CXX_x86_64_apple_darwin = None
+cargo:rerun-if-env-changed=HOST_CXX
+HOST_CXX = None
+cargo:rerun-if-env-changed=CXX
+CXX = None
+cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+CRATE_CC_NO_DEFAULTS = None
+CARGO_CFG_TARGET_FEATURE = Some("cmpxchg16b,fxsr,sse,sse2,sse3,ssse3")
+cargo:rerun-if-env-changed=CXXFLAGS_x86_64-apple-darwin
+CXXFLAGS_x86_64-apple-darwin = None
+cargo:rerun-if-env-changed=CXXFLAGS_x86_64_apple_darwin
+CXXFLAGS_x86_64_apple_darwin = None
+cargo:rerun-if-env-changed=HOST_CXXFLAGS
+HOST_CXXFLAGS = None
+cargo:rerun-if-env-changed=CXXFLAGS
+CXXFLAGS = None
+cargo:rerun-if-env-changed=CXX_x86_64-apple-darwin
+CXX_x86_64-apple-darwin = None
+cargo:rerun-if-env-changed=CXX_x86_64_apple_darwin
+CXX_x86_64_apple_darwin = None
+cargo:rerun-if-env-changed=HOST_CXX
+HOST_CXX = None
+cargo:rerun-if-env-changed=CXX
+CXX = None
+cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+CRATE_CC_NO_DEFAULTS = None
+CARGO_CFG_TARGET_FEATURE = Some("cmpxchg16b,fxsr,sse,sse2,sse3,ssse3")
+cargo:rerun-if-env-changed=CXXFLAGS_x86_64-apple-darwin
+CXXFLAGS_x86_64-apple-darwin = None
+cargo:rerun-if-env-changed=CXXFLAGS_x86_64_apple_darwin
+CXXFLAGS_x86_64_apple_darwin = None
+cargo:rerun-if-env-changed=HOST_CXXFLAGS
+HOST_CXXFLAGS = None
+cargo:rerun-if-env-changed=CXXFLAGS
+CXXFLAGS = None
+cargo:rerun-if-env-changed=CXX_x86_64-apple-darwin
+CXX_x86_64-apple-darwin = None
+cargo:rerun-if-env-changed=CXX_x86_64_apple_darwin
+CXX_x86_64_apple_darwin = None
+cargo:rerun-if-env-changed=HOST_CXX
+HOST_CXX = None
+cargo:rerun-if-env-changed=CXX
+CXX = None
+cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+CRATE_CC_NO_DEFAULTS = None
+CARGO_CFG_TARGET_FEATURE = Some("cmpxchg16b,fxsr,sse,sse2,sse3,ssse3")
+cargo:rerun-if-env-changed=CXXFLAGS_x86_64-apple-darwin
+CXXFLAGS_x86_64-apple-darwin = None
+cargo:rerun-if-env-changed=CXXFLAGS_x86_64_apple_darwin
+CXXFLAGS_x86_64_apple_darwin = None
+cargo:rerun-if-env-changed=HOST_CXXFLAGS
+HOST_CXXFLAGS = None
+cargo:rerun-if-env-changed=CXXFLAGS
+CXXFLAGS = None
+cargo:rerun-if-env-changed=CXX_x86_64-apple-darwin
+CXX_x86_64-apple-darwin = None
+cargo:rerun-if-env-changed=CXX_x86_64_apple_darwin
+CXX_x86_64_apple_darwin = None
+cargo:rerun-if-env-changed=HOST_CXX
+HOST_CXX = None
+cargo:rerun-if-env-changed=CXX
+CXX = None
+cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+CRATE_CC_NO_DEFAULTS = None
+CARGO_CFG_TARGET_FEATURE = Some("cmpxchg16b,fxsr,sse,sse2,sse3,ssse3")
+cargo:rerun-if-env-changed=CXXFLAGS_x86_64-apple-darwin
+CXXFLAGS_x86_64-apple-darwin = None
+cargo:rerun-if-env-changed=CXXFLAGS_x86_64_apple_darwin
+CXXFLAGS_x86_64_apple_darwin = None
+cargo:rerun-if-env-changed=HOST_CXXFLAGS
+HOST_CXXFLAGS = None
+cargo:rerun-if-env-changed=CXXFLAGS
+CXXFLAGS = None
+running: "c++" "-O0" "-ffunction-sections" "-fdata-sections" "-fPIC" "-gdwarf-2" "-fno-omit-frame-pointer" "-m64" "-arch" "x86_64" "-I" "/Users/jesskwoods/.cargo/registry/src/index.crates.io-6f17d22bba15001f/semolina-0.1.4/src" "-I" "/Users/jesskwoods/.cargo/registry/src/index.crates.io-6f17d22bba15001f/sppark-0.1.5/sppark" "-Wall" "-Wextra" "-mno-avx" "-fno-builtin" "-std=c++11" "-Wno-unused-command-line-argument" "-D__ADX__" "-o" "/Users/jesskwoods/Repos/nlookup/target/debug/build/lurk-pasta-msm-969f8d6e5dffe31b/out/src/pippenger.o" "-c" "src/pippenger.cpp"
+cargo:warning=In file included from src/pippenger.cpp:5:
+
+cargo:warning=In file included from /Users/jesskwoods/.cargo/registry/src/index.crates.io-6f17d22bba15001f/sppark-0.1.5/sppark/msm/pippenger.hpp:216:
+
+cargo:warning=/Users/jesskwoods/.cargo/registry/src/index.crates.io-6f17d22bba15001f/sppark-0.1.5/sppark/util/thread_pool_t.hpp:85:31: warning: unused parameter 'affinity_env' [-Wunused-parameter]
+
+cargo:warning=    thread_pool_t(const char* affinity_env) : done(false)
+
+cargo:warning=                              ^
+
+cargo:warning=1 warning generated.
+
+exit status: 0
+cargo:rerun-if-env-changed=AR_x86_64-apple-darwin
+AR_x86_64-apple-darwin = None
+cargo:rerun-if-env-changed=AR_x86_64_apple_darwin
+AR_x86_64_apple_darwin = None
+cargo:rerun-if-env-changed=HOST_AR
+HOST_AR = None
+cargo:rerun-if-env-changed=AR
+AR = None
+cargo:rerun-if-env-changed=ARFLAGS_x86_64-apple-darwin
+ARFLAGS_x86_64-apple-darwin = None
+cargo:rerun-if-env-changed=ARFLAGS_x86_64_apple_darwin
+ARFLAGS_x86_64_apple_darwin = None
+cargo:rerun-if-env-changed=HOST_ARFLAGS
+HOST_ARFLAGS = None
+cargo:rerun-if-env-changed=ARFLAGS
+ARFLAGS = None
+running: ZERO_AR_DATE="1" "ar" "cq" "/Users/jesskwoods/Repos/nlookup/target/debug/build/lurk-pasta-msm-969f8d6e5dffe31b/out/libpasta_msm.a" "/Users/jesskwoods/Repos/nlookup/target/debug/build/lurk-pasta-msm-969f8d6e5dffe31b/out/src/pippenger.o"
+exit status: 0
+running: "ar" "s" "/Users/jesskwoods/Repos/nlookup/target/debug/build/lurk-pasta-msm-969f8d6e5dffe31b/out/libpasta_msm.a"
+exit status: 0
+cargo:rustc-link-lib=static=pasta_msm
+cargo:rustc-link-search=native=/Users/jesskwoods/Repos/nlookup/target/debug/build/lurk-pasta-msm-969f8d6e5dffe31b/out
+cargo:rerun-if-env-changed=CXXSTDLIB_x86_64-apple-darwin
+CXXSTDLIB_x86_64-apple-darwin = None
+cargo:rerun-if-env-changed=CXXSTDLIB_x86_64_apple_darwin
+CXXSTDLIB_x86_64_apple_darwin = None
+cargo:rerun-if-env-changed=HOST_CXXSTDLIB
+HOST_CXXSTDLIB = None
+cargo:rerun-if-env-changed=CXXSTDLIB
+CXXSTDLIB = None
+cargo:rustc-link-lib=c++
+cargo:rerun-if-env-changed=NVCC

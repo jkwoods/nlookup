@@ -1,175 +1,212 @@
-pub struct NlookupCircuit<'a, F, A>
-where
-    F: PrimeField,
-    A: Arity<F>,
-{
-    constants: &'a PoseidonConstants<F, A>,
-    //_w: PhantomData<A>,
+type G1 = pasta_curves::pallas::Point;
+type G2 = pasta_curves::vesta::Point;
+type C1 = NlookupCircuit<<G1 as Group>::Scalar>;
+type C2 = TrivialTestCircuit<<G2 as Group>::Scalar>;
+type EE1 = nova_snark::provider::ipa_pc::EvaluationEngine<G1>;
+type EE2 = nova_snark::provider::ipa_pc::EvaluationEngine<G2>;
+type S1 = nova_snark::spartan::RelaxedR1CSSNARK<G1, EE1>;
+type S2 = nova_snark::spartan::RelaxedR1CSSNARK<G2, EE2>;
+
+use ::bellperson::{
+    gadgets::num::AllocatedNum, ConstraintSystem, LinearCombination, Namespace, SynthesisError,
+    Variable,
+};
+use ff::{Field, PrimeField};
+use neptune::{
+    circuit2::Elt,
+    poseidon::PoseidonConstants,
+    sponge::api::{IOPattern, SpongeAPI, SpongeOp},
+    sponge::circuit::SpongeCircuit,
+    sponge::vanilla::{Mode, SpongeTrait},
+};
+
+use nova_snark::{
+    traits::{
+        circuit::{StepCircuit, TrivialTestCircuit},
+        Group,
+    },
+    CompressedSNARK, PublicParams, RecursiveSNARK, StepCounterType, FINAL_EXTERNAL_COUNTER,
+};
+
+#[derive(Clone, Debug)]
+pub struct NlookupCircuit<F: PrimeField> {
+    placeholder: F,
+    batch_size: usize,
 }
 
-impl<'a, F, A> NlookupCircuit<'a, F, A>
-where
-    F: PrimeField,
-    A: Arity<F>,
-{
-    
-
-    fn fiatshamir<'b, CS, A>(
-        &self,
-        cs: &mut CS,
-        tag: &str,
-        num_rounds: usize,
-        num_cqs: usize,
-        alloc_qs: &Vec<Option<AllocatedNum<F>>>,
-        alloc_vs: &Vec<Option<AllocatedNum<F>>>,
-        alloc_prev_rc: &Vec<Option<AllocatedNum<F>>>,
-        alloc_rc: &Vec<Option<AllocatedNum<F>>>,
-        alloc_claim_r: &Option<AllocatedNum<F>>,
-        alloc_gs: &Vec<Vec<Option<AllocatedNum<F>>>>,
-        vesta_hash: F,
-    ) -> Result<(), SynthesisError>
-    where
-        A: Arity<F>,
-        CS: ConstraintSystem<F>,
-    {
-        let mut sponge = SpongeCircuit::new_with_constants(&self.pc, Mode::Simplex);
-        let mut sponge_ns = cs.namespace(|| format!("{} sponge", tag));
-
-        let mut pattern = match tag {
-            "nl" => {
-                vec![
-                    SpongeOp::Absorb((self.batch_size + sc_l + 1 + num_cqs) as u32), // vs,
-                    // combined_q,
-                    // running q,v
-                    SpongeOp::Squeeze(1),
-                ]
-            }
-            "nldoc" => {
-                vec![
-                    SpongeOp::Absorb((self.batch_size + sc_l + 2 + num_cqs) as u32), // vs,
-                    SpongeOp::Squeeze(1),
-                ]
-            }
-            "nlhybrid" => {
-                vec![
-                    SpongeOp::Absorb((self.batch_size * 2 + sc_l + 2 + num_cqs) as u32), // vs,
-                    SpongeOp::Squeeze(1),
-                ]
-            }
-            _ => panic!("weird tag"),
+impl<F: PrimeField> NlookupCircuit<F> {
+    pub fn new(batch_size: usize) -> Self {
+        return NlookupCircuit {
+            placeholder: F::zero(),
+            batch_size: batch_size,
         };
-        for _i in 0..sc_l {
-            // sum check rounds
-            pattern.append(&mut vec![SpongeOp::Absorb(3), SpongeOp::Squeeze(1)]);
-        }
-
-        sponge.start(IOPattern(pattern), None, &mut sponge_ns);
-
-        // first round claim
-        let mut claim = c_1.clone();
-
-for j in 1..=num_rounds {
-            // P makes a claim g_j(X_j) about a slice of its large multilinear polynomial
-            // g_j is degree 2 in our case
-
-            // V checks g_{j-1}(r_{j-1}) = g_j(0) + g_j(1)
-            // Ax^2 + Bx + C -> A + B + C + C
-
-            let g_j = sc_g_{}_xsq + sc_g_{}_x + (sc_g_{}_const * 2);
-
-            let claim_check = term(Op::Eq, vec![claim.clone(), g_j]);
-
-            // "V" chooses rand r_{j} (P chooses this with hash)
-            //let r_j = new_var(format!("sc_r_{}", j));
-
-            // update claim for the next round g_j(r_j)
-            claim = (((sc_g_{}_xsq * sc_r_{}) + sc_g_{}_x ) * sc_r_{}) + sc_g_{}_const
-
-            if j == num_rounds {
-                // output last g_v(r_v) claim
-
-                let last_claim = term(
-                    Op::Eq,
-                    vec![claim.clone(), new_var(format!("{}_sc_last_claim", id))],
-                );
-                self.assertions.push(last_claim);
-                self.pub_inputs
-                    .push(new_var(format!("{}_sc_last_claim", id)));
-            }
-}
-
-        // (combined_q, vs, running_q, running_v)
-        let mut elts = vec![];
-        //println!("FIAT SHAMIR ELTS {}", tag);
-
-        // if DOC
-        if matches!(tag, "nldoc") || matches!(tag, "nlhybrid") {
-            let e = AllocatedNum::alloc(sponge_ns.namespace(|| "doc commit hash start"), || {
-                Ok(vesta_hash)
-            })?;
-
-            //println!("e: {:#?}", e.clone().get_value());
-            elts.push(Elt::Allocated(e));
-        }
-        for e in alloc_qs {
-            elts.push(Elt::Allocated(e.clone().unwrap()));
-            //println!("e: {:#?}", e.clone().unwrap().get_value());
-        }
-        for e in alloc_vs {
-            elts.push(Elt::Allocated(e.clone().unwrap()));
-            //println!("e: {:#?}", e.clone().unwrap().get_value());
-        }
-        for e in alloc_prev_rc {
-            elts.push(Elt::Allocated(e.clone().unwrap()));
-            //println!("e: {:#?}", e.clone().unwrap().get_value());
-        }
-
-
-        for j in 0..sc_l {
-            let mut elts = vec![];
-            for coeffs in &alloc_gs[j] {
-                for e in coeffs {
-                    elts.push(Elt::Allocated(e.clone()));
-                }
-            }
-
-            self.fiatshamir_circuit(
-                &elts,
-                &mut sponge,
-                &mut sponge_ns,
-                alloc_rc[j].clone().unwrap(),
-                &format!("sc_r_{}", j),
-            )?;
-        }
-
-        sponge.finish(&mut sponge_ns).unwrap();
-        return Ok(());
     }
 
-    fn fiatshamir_circuit<'b, CS>(
-        &self,
-        query: &[Elt<F>],
-        sponge: &mut SpongeCircuit<'b, F, A, CS>,
-        sponge_ns: &mut Namespace<'b, F, CS>,
-        input_eq: AllocatedNum<F>,
-        tag: &str,
-    ) -> Result<AllocatedNum<F>, SynthesisError>
+    fn internal_gadget_example<CS>(&self, cs: &mut CS) -> Result<AllocatedNum<F>, SynthesisError>
     where
-        A: Arity<F>,
         CS: ConstraintSystem<F>,
     {
-        let new_pos = {
-            SpongeAPI::absorb(sponge, query.len() as u32, query, sponge_ns);
+        let allocated_witness =
+            AllocatedNum::alloc(cs.namespace(|| "unique_name"), || Ok(self.placeholder))?;
 
-            let output = SpongeAPI::squeeze(sponge, 1, sponge_ns);
+        return Ok(allocated_witness);
+    }
+}
 
-            Elt::ensure_allocated(
-                &output[0],
-                &mut sponge_ns.namespace(|| format!("ensure allocated {}", tag)), // name must be the same
-                true,
-            )?
-        };
+impl<F: PrimeField> StepCircuit<F> for NlookupCircuit<F> {
+    // nova wants this to return the "output" of each step
+    fn synthesize<CS>(
+        &self,
+        cs: &mut CS,
+        z: &[AllocatedNum<F>],
+    ) -> Result<Vec<AllocatedNum<F>>, SynthesisError>
+    where
+        CS: ConstraintSystem<F>,
+        G1: Group<Base = <G2 as Group>::Scalar>,
+        G2: Group<Base = <G1 as Group>::Scalar>,
+    {
+        // inputs
+        let alloc_z0 = z[0].clone();
+        let alloc_z1 = z[1].clone();
 
-        Ok(new_pos)
+        let alloc_placeholder = self.internal_gadget_example(cs)?;
+
+        cs.enforce(
+            || format!("z0 * (z1 + 1) == placeholder"),
+            |lc| lc + alloc_z0.get_variable(),
+            |lc| lc + alloc_z1.get_variable() + CS::one(),
+            |lc| lc + alloc_placeholder.get_variable(),
+        );
+
+        // outputs
+        let out = vec![alloc_z0, alloc_z1];
+        return Ok(out);
+    }
+
+    // arity = len of i/o vector z
+    fn arity(&self) -> usize {
+        return 2;
+    }
+
+    // this function does not make constraints, but you have to have it (stupid)
+    // it's usually used as a sanity check that your synthesize() is outputing what you expect
+    fn output(&self, z: &[F]) -> Vec<F> {
+        assert!(z.len() == 2);
+        return z.to_vec(); // right now the input == output, this should change eventually
+    }
+
+    // can leave this as is
+    fn get_counter_type(&self) -> StepCounterType {
+        StepCounterType::External
+    }
+}
+
+// external helper functions/gadgets
+
+// ret = if condition, a, else b
+// condition must be asserted to be 0 or 1 somewhere else
+fn select<F, CS>(
+    cs: &mut CS,
+    cond: AllocatedNum<F>,
+    a: AllocatedNum<F>,
+    b: AllocatedNum<F>,
+    tag: &String,
+) -> Result<AllocatedNum<F>, SynthesisError>
+where
+    F: PrimeField,
+    CS: ConstraintSystem<F>,
+{
+    let ret = AllocatedNum::alloc(cs.namespace(|| format!("ret {}", tag)), || {
+        Ok(b.get_value().unwrap()
+            + cond.get_value().unwrap() * (a.get_value().unwrap() - b.get_value().unwrap()))
+    })?;
+
+    // RET = B + COND * (A - B) <- ite
+    cs.enforce(
+        || format!("ite {}", tag),
+        |lc| lc + a.get_variable() - b.get_variable(),
+        |lc| lc + cond.get_variable(),
+        |lc| lc + ret.get_variable() - b.get_variable(),
+    );
+
+    return Ok(ret);
+}
+
+#[cfg(test)]
+mod tests {
+
+    use crate::circuit::*;
+
+    #[test]
+    fn test_1() {
+        let circuit_primary: NlookupCircuit<<G1 as Group>::Scalar> = NlookupCircuit::new(0);
+
+        // trivial circuit
+        let circuit_secondary = TrivialTestCircuit::new(StepCounterType::External);
+
+        // produce public parameters
+        let pp = PublicParams::<
+            G1,
+            G2,
+            NlookupCircuit<<G1 as Group>::Scalar>,
+            TrivialTestCircuit<<G2 as Group>::Scalar>,
+        >::setup(circuit_primary.clone(), circuit_secondary.clone())
+        .unwrap();
+
+        println!(
+            "Number of constraints (primary circuit): {}",
+            pp.num_constraints().0
+        );
+        println!(
+            "Number of constraints (secondary circuit): {}",
+            pp.num_constraints().1
+        );
+
+        println!(
+            "Number of variables (primary circuit): {}",
+            pp.num_variables().0
+        );
+        println!(
+            "Number of variables (secondary circuit): {}",
+            pp.num_variables().1
+        );
+
+        let z0_primary = vec![
+            <G1 as Group>::Scalar::zero(),
+            <G1 as Group>::Scalar::from(4),
+        ];
+        let z0_secondary = vec![<G2 as Group>::Scalar::zero()];
+
+        let mut recursive_snark = None;
+
+        // prover folds
+        for i in 0..3 {
+            println!("Proving step {}", i);
+
+            let result = RecursiveSNARK::prove_step(
+                &pp,
+                recursive_snark,
+                circuit_primary.clone(),
+                circuit_secondary.clone(),
+                z0_primary.clone(),
+                z0_secondary.clone(),
+            );
+
+            recursive_snark = Some(result.unwrap());
+        }
+
+        assert!(recursive_snark.is_some());
+        let recursive_snark = recursive_snark.unwrap();
+
+        // prover compresses final SNARK
+        let res = CompressedSNARK::<_, _, _, _, S1, S2>::prove(&pp, &recursive_snark);
+
+        assert!(res.is_ok());
+        let compressed_snark = res.unwrap();
+
+        // verify
+        let res = compressed_snark.verify(&pp, FINAL_EXTERNAL_COUNTER, z0_primary, z0_secondary);
+
+        assert!(res.is_ok());
     }
 }

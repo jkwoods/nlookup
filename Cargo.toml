@@ -6,3 +6,10 @@ edition = "2021"
 [dependencies]
 neptune = "8.1.0"
 bellperson = { version = "0.24", default-features = false }
+pasta_curves = { version = "0.5.2", features = ["repr-c", "serde"], package = "fil_pasta_curves" }
+nova-snark ={ git = "https://github.com/sga001/Nova" }
+ff = "0.12.0"
+
+[profile.test]
+opt-level = 3
+
