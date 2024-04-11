@@ -1,37 +1,27 @@
-type G1 = pasta_curves::pallas::Point;
-type G2 = pasta_curves::vesta::Point;
+use ark_ff::{fields::PrimeField, Zero};
+use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystem, ConstraintSystemRef, SynthesisError};
+use ark_std::marker::PhantomData;
+
+type G1 = ark_ec::ProjectiveCurve;
+type G2 = ark_ec::ProjectiveCurve;
 type C1 = NlookupCircuit<<G1 as Group>::Scalar>;
 type C2 = TrivialTestCircuit<<G2 as Group>::Scalar>;
-type EE1 = nova_snark::provider::ipa_pc::EvaluationEngine<G1>;
-type EE2 = nova_snark::provider::ipa_pc::EvaluationEngine<G2>;
-type S1 = nova_snark::spartan::RelaxedR1CSSNARK<G1, EE1>;
-type S2 = nova_snark::spartan::RelaxedR1CSSNARK<G2, EE2>;
 
-use ::bellperson::{
-    gadgets::num::AllocatedNum, ConstraintSystem, LinearCombination, Namespace, SynthesisError,
-    Variable,
+use nova_ark::traits::{
+    circuit::{StepCircuit, TrivialTestCircuit},
+    Group,
 };
-use ff::{Field, PrimeField};
-use neptune::{
-    circuit2::Elt,
-    poseidon::PoseidonConstants,
-    sponge::api::{IOPattern, SpongeAPI, SpongeOp},
-    sponge::circuit::SpongeCircuit,
-    sponge::vanilla::{Mode, SpongeTrait},
-};
-
-use nova_snark::{
-    traits::{
-        circuit::{StepCircuit, TrivialTestCircuit},
-        Group,
-    },
-    CompressedSNARK, PublicParams, RecursiveSNARK, StepCounterType, FINAL_EXTERNAL_COUNTER,
-};
+use nova_ark::CompressedSNARK;
+use nova_ark::PublicParams;
+use nova_ark::RecursiveSNARK;
+use nova_ark::StepCounterType;
+use nova_ark::FINAL_EXTERNAL_COUNTER;
 
 #[derive(Clone, Debug)]
 pub struct NlookupCircuit<F: PrimeField> {
     placeholder: F,
     batch_size: usize,
+    _engine: PhantomData<F>,
 }
 
 impl<F: PrimeField> NlookupCircuit<F> {
@@ -39,97 +29,19 @@ impl<F: PrimeField> NlookupCircuit<F> {
         return NlookupCircuit {
             placeholder: F::zero(),
             batch_size: batch_size,
+            _engine: PhantomData,
         };
     }
-
-    fn internal_gadget_example<CS>(&self, cs: &mut CS) -> Result<AllocatedNum<F>, SynthesisError>
-    where
-        CS: ConstraintSystem<F>,
-    {
-        let allocated_witness =
-            AllocatedNum::alloc(cs.namespace(|| "unique_name"), || Ok(self.placeholder))?;
-
-        return Ok(allocated_witness);
-    }
 }
 
-impl<F: PrimeField> StepCircuit<F> for NlookupCircuit<F> {
-    // nova wants this to return the "output" of each step
-    fn synthesize<CS>(
-        &self,
-        cs: &mut CS,
-        z: &[AllocatedNum<F>],
-    ) -> Result<Vec<AllocatedNum<F>>, SynthesisError>
-    where
-        CS: ConstraintSystem<F>,
-        G1: Group<Base = <G2 as Group>::Scalar>,
-        G2: Group<Base = <G1 as Group>::Scalar>,
-    {
-        // inputs
-        let alloc_z0 = z[0].clone();
-        let alloc_z1 = z[1].clone();
-
-        let alloc_placeholder = self.internal_gadget_example(cs)?;
-
-        cs.enforce(
-            || format!("z0 * (z1 + 1) == placeholder"),
-            |lc| lc + alloc_z0.get_variable(),
-            |lc| lc + alloc_z1.get_variable() + CS::one(),
-            |lc| lc + alloc_placeholder.get_variable(),
-        );
-
-        // outputs
-        let out = vec![alloc_z0, alloc_z1];
-        return Ok(out);
+impl<F: PrimeField> ConstraintSynthesizer<F> for NlookupCircuit<F> {
+    fn generate_constraints(self, cs: ConstraintSystemRef<F>) -> Result<(), SynthesisError> {
+        // Here you can add your constraints to the ConstraintSystem `cs`
+        // For example:
+        // let var = cs.new_witness_variable(|| Ok(self.placeholder))?;
+        // cs.enforce_constraint(lc!() + var, lc!() + CS::one(), lc!() + var)?;
+        Ok(())
     }
-
-    // arity = len of i/o vector z
-    fn arity(&self) -> usize {
-        return 2;
-    }
-
-    // this function does not make constraints, but you have to have it (stupid)
-    // it's usually used as a sanity check that your synthesize() is outputing what you expect
-    fn output(&self, z: &[F]) -> Vec<F> {
-        assert!(z.len() == 2);
-        return z.to_vec(); // right now the input == output, this should change eventually
-    }
-
-    // can leave this as is
-    fn get_counter_type(&self) -> StepCounterType {
-        StepCounterType::External
-    }
-}
-
-// external helper functions/gadgets
-
-// ret = if condition, a, else b
-// condition must be asserted to be 0 or 1 somewhere else
-fn select<F, CS>(
-    cs: &mut CS,
-    cond: AllocatedNum<F>,
-    a: AllocatedNum<F>,
-    b: AllocatedNum<F>,
-    tag: &String,
-) -> Result<AllocatedNum<F>, SynthesisError>
-where
-    F: PrimeField,
-    CS: ConstraintSystem<F>,
-{
-    let ret = AllocatedNum::alloc(cs.namespace(|| format!("ret {}", tag)), || {
-        Ok(b.get_value().unwrap()
-            + cond.get_value().unwrap() * (a.get_value().unwrap() - b.get_value().unwrap()))
-    })?;
-
-    // RET = B + COND * (A - B) <- ite
-    cs.enforce(
-        || format!("ite {}", tag),
-        |lc| lc + a.get_variable() - b.get_variable(),
-        |lc| lc + cond.get_variable(),
-        |lc| lc + ret.get_variable() - b.get_variable(),
-    );
-
-    return Ok(ret);
 }
 
 #[cfg(test)]
