@@ -1,7 +1,9 @@
 use ark_ff::{fields::PrimeField, Zero};
-use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystem, ConstraintSystemRef, SynthesisError};
-use ark_std::marker::PhantomData;
 use ark_pallas::Fr as ScalarField;
+use ark_relations::r1cs::{
+    ConstraintSynthesizer, ConstraintSystem, ConstraintSystemRef, SynthesisError,
+};
+use ark_std::marker::PhantomData;
 
 #[derive(Clone, Debug)]
 pub struct NlookupCircuit<F: PrimeField> {
@@ -33,9 +35,9 @@ impl<F: PrimeField> ConstraintSynthesizer<F> for NlookupCircuit<F> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ark_relations::r1cs::{ConstraintSystem, ConstraintSystemRef};
     use ark_ec::PairingEngine;
     use ark_ff::Field;
+    use ark_relations::r1cs::{ConstraintSystem, ConstraintSystemRef};
     use ark_std::rand::Rng;
     use ark_std::test_rng;
 
@@ -46,7 +48,10 @@ mod tests {
         test_circuit::<_, _, ark_ec::bls12::Bls12_381>(circuit, rng);
     }
 
-    fn test_circuit<E: PairingEngine, C: ConstraintSynthesizer<E::Fr>, R: Rng>(circuit: C, rng: &mut R) {
+    fn test_circuit<E: PairingEngine, C: ConstraintSynthesizer<E::Fr>, R: Rng>(
+        circuit: C,
+        rng: &mut R,
+    ) {
         // Create an instance of our circuit (with the witness)
         let cs = ConstraintSystem::<E::Fr>::new_ref();
         circuit.generate_constraints(cs.clone()).unwrap();
