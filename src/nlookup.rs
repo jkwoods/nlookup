@@ -9,7 +9,7 @@ use ark_r1cs_std::{
     boolean::Boolean,
     eq::EqGadget,
     fields::{fp::FpVar, FieldVar},
-    R1CSVar,
+    R1CSVar, ToConstraintFieldGadget,
 };
 use ark_relations::{
     lc, ns,
@@ -25,16 +25,15 @@ pub struct NLookupWires<F: PrimeField> {
 }
 // we assume for now user is not interested in prev_running_q/v
 
-/*
-#[derive(Clone, Debug)]
-pub struct NLookupTable<F: PrimeField> {
+// TODO
+pub struct Table<F: PrimeField> {
     t: Vec<F>,
+    public: bool, // T pub or priv?
+    projs: Vec<(usize, usize)>,
+}
 
-}*/
-
-#[derive(Clone, Debug)]
 pub struct NLookup<F: PrimeField> {
-    ell: usize,
+    ell: usize, // for "big" table
     pcs: PoseidonConfig<F>,
     table_t: Vec<F>,
     table_pub: bool, // T pub or priv?
@@ -128,12 +127,12 @@ impl<F: PrimeField> NLookup<F> {
             &running_q.into_iter().rev().collect(),
         );
         let (next_running_q, last_claim) =
-            self.sum_check_circuit(cs.clone(), init_claim, sponge, temp_eq)?;
+            self.sum_check(cs.clone(), init_claim, sponge, temp_eq)?;
 
         // last_claim & eq circuit
         let mut eq_evals = vec![FpVar::zero()]; // dummy for horners
         for i in 0..num_lookups + 1 {
-            eq_evals.push(self.bit_eq_circuit(i));
+            eq_evals.push(self.bit_eq(&q_vars[i].1, &next_running_q)?);
         }
         let eq_eval = horners(&eq_evals, &rho);
 
@@ -157,7 +156,7 @@ impl<F: PrimeField> NLookup<F> {
         })
     }
 
-    fn sum_check_circuit(
+    fn sum_check(
         &mut self,
         cs: ConstraintSystemRef<F>,
         init_claim: FpVar<F>,
@@ -200,6 +199,29 @@ impl<F: PrimeField> NLookup<F> {
         Ok((rands, claim))
     }
 
+    fn bit_eq(
+        &mut self,
+        qi: &Vec<Boolean<F>>,
+        r: &Vec<FpVar<F>>,
+    ) -> Result<FpVar<F>, SynthesisError> {
+        let mut eq = Vec::<FpVar<F>>::new();
+        for j in 0..self.ell {
+            let qij_vec = qi[j].to_constraint_field()?;
+            assert_eq!(qij_vec.len(), 1);
+            let qij = qij_vec[0];
+
+            let next = (qij * r[j]) + ((FpVar::one() - qij) * (FpVar::one() - r[j]));
+            eq.push(next);
+        }
+
+        let ret = eq[0];
+        for i in 1..eq.len() {
+            ret *= eq[i];
+        }
+
+        Ok(ret)
+    }
+
     // starts with evals on hypercube
     fn prover_msg(&self, i: usize, temp_table: &Vec<F>, temp_eq: &Vec<F>) -> (F, F, F) {
         let base: usize = 2;
@@ -239,6 +261,8 @@ impl<F: PrimeField> NLookup<F> {
             temp_eq[b] = temp_eq[b] * (F::one() - r_i) + temp_eq[b + pow] * r_i;
         }
     }
+
+    fn mle_eval(&self, x: Vec<F>) {}
 
     fn gen_eq_table(rho: F, qs: &Vec<usize>, last_q: &Vec<F>) -> Vec<F> {
         let base: usize = 2;
