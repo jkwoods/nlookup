@@ -23,7 +23,6 @@ pub struct NLookupWires<F: PrimeField> {
     next_running_q: Vec<FpVar<F>>,
     next_running_v: FpVar<F>,
 }
-// we assume for now user is not interested in prev_running_q/v
 
 /*
 #[derive(Clone, Debug)]
@@ -93,61 +92,40 @@ impl<F: PrimeField> NLookup<F> {
             v_vars.push(FpVar::<F>::new_witness(cs.clone(), || Ok(F::from(v[vi])))?);
         }
 
-        let mut running_q_vars = Vec::<FpVar<F>>::new();
-        for rqi in 0..running_q.len() {
-            running_q_vars.push(FpVar::<F>::new_witness(cs.clone(), || Ok(running_q[rqi]))?);
-        }
-        let running_v_var = FpVar::<F>::new_witness(cs.clone(), || Ok(F::from(running_v)))?;
-
         // q processing (combine)
         // TODO
         let mut sponge = PoseidonSpongeVar::<F>::new(cs.clone(), &self.pcs);
 
         // sponge aborbs qs, vs, running q, running v, and possibly doc commit
         // TODO
-        let mut query = Vec::<FpVar<F>>::new();
-
-        query.extend(running_q_vars.clone());
-        query.extend(v_vars.clone());
-        query.extend(vec![running_v_var.clone()]);
+        let query = Vec::<FpVar<F>>::new();
         sponge.absorb(&query)?;
 
         // sponge squeezed to produce rs
         let hash = sponge.squeeze_field_elements(1)?;
-        let rho = &hash[0];
+        let rho = FpVar::<F>::new_witness(cs.clone(), || Ok(F::from(2 as u64)))?; //&hash[0];
 
-        // LHS of nl equation (vs and ros)
-        // running q,v are the "constant" (not hooked to a rho)
-        let mut horners_vals = vec![running_v_var.clone()];
-        horners_vals.extend(v_vars.clone());
-        let init_claim = horners(&horners_vals, &rho);
+        let mut rs = Vec::<FpVar<F>>::new();
+        rs.push(rho.clone());
+        for i in 0..num_lookups {
+            rs.push(&rs[i] * &rho);
+        }
 
         let temp_eq = Self::gen_eq_table(
-            rho.value().unwrap(),
+            &rs.into_iter().map(|x| x.value().unwrap()).collect(),
             &q,
             &running_q.into_iter().rev().collect(),
         );
-        let (next_running_q, last_claim) =
-            self.sum_check_circuit(cs.clone(), init_claim, sponge, temp_eq)?;
 
-        // last_claim & eq circuit
-        let mut eq_evals = vec![FpVar::zero()]; // dummy for horners
-        for i in 0..num_lookups + 1 {
-            eq_evals.push(self.bit_eq_circuit(i));
-        }
-        let eq_eval = horners(&eq_evals, &rho);
+        // LHS of nl equation (vs and ros)
+        let init_claim = horners(&v_vars, &rho);
 
-        let next_running_v = FpVar::<F>::new_witness(cs.clone(), || {
-            Ok(mle_eval(
-                next_running_q
-                    .into_iter()
-                    .map(|x| x.value().unwrap())
-                    .collect(),
-            ))
-        })?;
+        let last_claim = self.sum_check_circuit(cs.clone(), init_claim, sponge, temp_eq);
 
-        // last_claim = eq_eval * next_running_claim
-        last_claim.enforce_equal(&(eq_eval * next_running_v));
+        // last_claim & eq circuit -> TODO possibly make this horners too and remove rs fpvar calc
+
+        let next_running_q = vec![];
+        let next_running_v = FpVar::<F>::new_witness(cs.clone(), || Ok(F::zero()))?;
 
         Ok(NLookupWires {
             q: q_vars,
@@ -163,15 +141,20 @@ impl<F: PrimeField> NLookup<F> {
         init_claim: FpVar<F>,
         mut sponge: PoseidonSpongeVar<F>,
         mut temp_eq: Vec<F>,
-    ) -> Result<(Vec<FpVar<F>>, FpVar<F>), SynthesisError> {
+    ) -> Result<FpVar<F>, SynthesisError> {
         let mut temp_table = self.table_t.clone(); // todo
 
         // current claim in each round
         let mut claim = init_claim.clone();
 
-        let mut rands = Vec::<FpVar<F>>::new();
         for j in 0..self.ell {
             let (con, x, xsq) = self.prover_msg(j, &temp_table, &temp_eq);
+            println!(
+                "prover msg {:#?}, {:#?}, {:#?}",
+                con.clone(),
+                x.clone(),
+                xsq.clone()
+            );
 
             let g_j_const = FpVar::<F>::new_witness(cs.clone(), || Ok(con))?;
             let g_j_x = FpVar::<F>::new_witness(cs.clone(), || Ok(x))?;
@@ -193,11 +176,10 @@ impl<F: PrimeField> NLookup<F> {
             claim = ((g_j_xsq * r_j) + g_j_x) * r_j + g_j_const;
 
             self.update_tables(r_j.value()?, j, &mut temp_table, &mut temp_eq);
-            rands.push(hash[0]);
         }
 
         // last claim
-        Ok((rands, claim))
+        Ok(claim)
     }
 
     // starts with evals on hypercube
@@ -240,26 +222,21 @@ impl<F: PrimeField> NLookup<F> {
         }
     }
 
-    fn gen_eq_table(rho: F, qs: &Vec<usize>, last_q: &Vec<F>) -> Vec<F> {
+    fn gen_eq_table(rs: &Vec<F>, qs: &Vec<usize>, last_q: &Vec<F>) -> Vec<F> {
         let base: usize = 2;
         let ell: usize = last_q.len();
-        let t_len = base.pow(ell as u32);
 
-        let mut rhos = Vec::<F>::new();
-        rhos.push(rho);
-        for i in 0..(qs.len() - 1) {
-            rhos.push(rhos[i] * rho);
-        }
-        rhos.push(F::one());
+        let t_len = base.pow(ell as u32);
+        assert_eq!(rs.len(), qs.len() + 1);
 
         let mut eq_t = vec![F::zero(); t_len];
 
         for i in 0..qs.len() {
-            eq_t[qs[i]] += rhos[i];
+            eq_t[qs[i]] += rs[i];
         }
 
         for i in 0..eq_t.len() {
-            let mut term = rhos[qs.len()].clone();
+            let mut term = rs[qs.len()].clone();
 
             for j in (0..ell).rev() {
                 let xi = (i >> j) & 1;
@@ -319,11 +296,100 @@ mod tests {
 
     #[test]
     fn nl_basic() {
-        let table = vec![2, 3, 5, 7, 9, 13, 17, 19];
+        let table = vec![3, 5, 7, 9];
 
-        let q = vec![2, 1, 7];
-        let v = vec![5, 3, 19];
+        let q = vec![0, 1, 2];
+        let v = vec![3, 5, 7];
 
         run_nlookup(3, q, v, table);
+    }
+
+    #[test]
+    fn mle_linear_basic() {
+        let mut evals = vec![
+            F::from(2),
+            F::from(3),
+            F::from(5),
+            F::from(7),
+            F::from(9),
+            F::from(13),
+            F::from(17),
+            F::from(19),
+        ];
+
+        let table = evals.clone();
+
+        let mut nl = NLookup::new(table.clone(), true);
+
+        let qs = vec![2, 1, 7];
+
+        let last_q = vec![F::from(0), F::from(0), F::from(0)];
+        //vec![F::from(2), F::from(3), F::from(5)],
+
+        let claims = vec![F::from(3), F::from(9), F::from(27), F::from(81)];
+
+        let mut term = F::from(0);
+        for i in 0..qs.len() {
+            term += evals[qs[i]].clone() * &claims[i];
+        }
+
+        let mut eq_a =
+            NLookup::gen_eq_table(&claims, &qs, &last_q.clone().into_iter().rev().collect());
+
+        println!("EQ TABLE {:#?} END", eq_a);
+
+        // claim check
+        let running_v = table[0];
+        //let (_, running_v) = F::from();
+        //    prover_mle_partial_eval(&evals, &last_q, &(0..evals.len()).collect(), true, None);
+        term += running_v * &claims[3];
+
+        let mut claim: F = evals
+            .iter()
+            .zip(eq_a.iter())
+            .map(|(ti, eqi)| ti * eqi)
+            .sum();
+
+        assert_eq!(term, claim);
+
+        let mut sc_rs = vec![];
+        for i in 0..3 {
+            let (con, x, xsq) = nl.prover_msg(i, &evals, &eq_a);
+            println!(
+                "prover msg {:#?}, {:#?}, {:#?}",
+                con.clone(),
+                x.clone(),
+                xsq.clone()
+            );
+
+            let r_i = F::from(5); // todo
+
+            let g0_g1 = &con + &con + &x + &xsq;
+            println!(
+                "i {:#?}, claim {:#?}, g0 g1 {:#?}",
+                i,
+                claim.clone(),
+                g0_g1.clone()
+            );
+            assert_eq!(claim, g0_g1);
+
+            claim = xsq * r_i * r_i + x * r_i + con;
+
+            sc_rs.push(r_i);
+
+            nl.update_tables(r_i, i, &mut evals, &mut eq_a);
+        }
+        /*
+                    // next
+                    let (_, next_running_v) =
+                        prover_mle_partial_eval(&table, &sc_rs, &(0..table.len()).collect(), true, None);
+
+                    // sanity check
+                    let (_, eq_term) = prover_mle_partial_eval(&claims, &sc_rs, &qs, false, Some(&last_q));
+                    assert_eq!(
+                        claim, // last claim
+                        (eq_term * next_running_v.clone())
+                    );
+        */
     }
 }
