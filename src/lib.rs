@@ -1,3 +1,2 @@
-pub mod circuit;
-pub mod sumcheck;
+pub mod nlookup;
 pub mod utils;
