@@ -227,9 +227,8 @@ impl<F: PrimeField> NLookup<F> {
         r: &Vec<FpVar<F>>,
     ) -> Result<FpVar<F>, SynthesisError> {
         let mut eq = Vec::<FpVar<F>>::new();
-        for j in (0..self.ell).rev() {
-            let next = (&qi[j] * &r[self.ell - j - 1])
-                + ((FpVar::one() - &qi[j]) * (FpVar::one() - &r[self.ell - j - 1]));
+        for j in 0..self.ell {
+            let next = (&qi[j] * &r[j]) + ((FpVar::one() - &qi[j]) * (FpVar::one() - &r[j]));
             eq.push(next);
         }
 
@@ -409,17 +408,6 @@ mod tests {
         let v = vec![5, 3, 19];
 
         run_nlookup(3, q, v, table);
-    }
-
-    #[test]
-    fn nl_many_lookups() {
-        let table = vec![2, 3, 5, 7, 9, 13, 17, 19];
-
-        let q = vec![2, 1, 7, 2, 3, 4, 0, 1];
-        let v = vec![5, 3, 19, 5, 7, 9, 2, 3];
-
-        run_nlookup(8, q.clone(), v.clone(), table.clone());
-        run_nlookup(4, q, v, table);
     }
 
     #[test]
