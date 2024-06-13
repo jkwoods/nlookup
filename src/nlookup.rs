@@ -34,6 +34,7 @@ pub struct Table<F: PrimeField> {
 
 pub struct NLookup<F: PrimeField> {
     ell: usize, // for "big" table
+    m: usize,
     pcs: PoseidonConfig<F>,
     table_t: Vec<F>,
     table_pub: bool, // T pub or priv?
@@ -42,7 +43,9 @@ pub struct NLookup<F: PrimeField> {
 
 // sumcheck for one round; q,v,eq table will change per round
 impl<F: PrimeField> NLookup<F> {
-    pub fn new(table_t: Vec<F>, table_pub: bool) -> Self {
+    pub fn new(table_t: Vec<F>, table_pub: bool, num_lookups: usize) -> Self {
+        assert!(num_lookups > 0);
+
         let ell = logmn(table_t.len());
 
         let pcs: PoseidonConfig<F> =
@@ -50,6 +53,7 @@ impl<F: PrimeField> NLookup<F> {
 
         NLookup {
             ell,
+            m: num_lookups,
             pcs,
             table_t,
             table_pub,
@@ -77,6 +81,7 @@ impl<F: PrimeField> NLookup<F> {
         running_v: F,
     ) -> Result<NLookupWires<F>, SynthesisError> {
         assert_eq!(q.len(), v.len());
+        assert_eq!(self.m, q.len());
         assert_eq!(self.ell, running_q.len());
         let num_lookups = v.len();
 
@@ -113,7 +118,8 @@ impl<F: PrimeField> NLookup<F> {
 
         // sponge squeezed to produce rs
         let hash = sponge.squeeze_field_elements(1)?;
-        let rho = FpVar::one() + FpVar::one() + FpVar::one(); // &hash[0];
+        let temp = FpVar::one() + FpVar::one(); //&hash[0];
+        let rho = &temp;
 
         // LHS of nl equation (vs and ros)
         // running q,v are the "constant" (not hooked to a rho)
@@ -131,8 +137,8 @@ impl<F: PrimeField> NLookup<F> {
 
         // last_claim & eq circuit
         // TODO CLONE REV CLEAN UP
-        let mut eq_evals = vec![self.bit_eq(&running_q_vars, &next_running_q)?]; //??
-        println!("running q eq {:#?}", eq_evals[0].clone().value().unwrap());
+        let mut eq_evals =
+            vec![self.bit_eq(&running_q_vars.into_iter().rev().collect(), &next_running_q)?]; //??
 
         for i in 0..num_lookups {
             let mut qi_vec = Vec::<FpVar<F>>::new();
@@ -144,7 +150,6 @@ impl<F: PrimeField> NLookup<F> {
 
             eq_evals.push(self.bit_eq(&qi_vec, &next_running_q)?);
         }
-        println!("reg q eq {:#?}", eq_evals[1].clone().value().unwrap());
         let eq_eval = horners(&eq_evals, &rho);
 
         let next_running_v = FpVar::<F>::new_witness(cs.clone(), || {
@@ -156,10 +161,6 @@ impl<F: PrimeField> NLookup<F> {
                     .collect(),
             ))
         })?;
-        println!(
-            "next running v {:#?}",
-            next_running_v.clone().value().unwrap()
-        );
 
         // last_claim = eq_eval * next_running_claim
         last_claim.enforce_equal(&(eq_eval * &next_running_v));
@@ -192,6 +193,7 @@ impl<F: PrimeField> NLookup<F> {
             let g_j_x = FpVar::<F>::new_witness(cs.clone(), || Ok(x))?;
             let g_j_xsq = FpVar::<F>::new_witness(cs.clone(), || Ok(xsq))?;
 
+            // sanity
             assert_eq!(
                 claim.value().unwrap(),
                 (&g_j_const + &g_j_const + &g_j_x + &g_j_xsq)
@@ -203,13 +205,7 @@ impl<F: PrimeField> NLookup<F> {
 
             sponge.absorb(&vec![&g_j_const, &g_j_x, &g_j_xsq])?;
             let hash = sponge.squeeze_field_elements(1)?;
-            let temp = if j == 0 {
-                FpVar::one() + FpVar::one() + FpVar::one()
-            } else {
-                FpVar::one() + FpVar::one()
-            };
-            // TODO &hash[0;
-            let r_j = &temp;
+            let r_j = &FpVar::one(); // &hash[0];
 
             claim = ((g_j_xsq * r_j) + g_j_x) * r_j + g_j_const;
 
@@ -261,11 +257,6 @@ impl<F: PrimeField> NLookup<F> {
 
             let t_slope = ti_1 - ti_0;
             let e_slope = ei_1 - ei_0;
-
-            println!(
-                "t slope {:#?} t const {:#?} e slope {:#?} e const {:#?}",
-                t_slope, ti_0, e_slope, ei_0
-            );
 
             xsq += t_slope * e_slope;
             x += e_slope * ti_0;
@@ -319,7 +310,6 @@ impl<F: PrimeField> NLookup<F> {
 
             size *= 2;
         }
-        println!("EVALS {:#?}", evals.clone());
         evals
     }
 
@@ -330,8 +320,10 @@ impl<F: PrimeField> NLookup<F> {
 
         let mut rhos = Vec::<F>::new();
         rhos.push(rho);
-        for i in 0..(qs.len() - 1) {
-            rhos.push(rhos[i] * rho);
+        if qs.len() > 1 {
+            for i in 0..(qs.len() - 1) {
+                rhos.push(rhos[i] * rho);
+            }
         }
         rhos.push(F::one());
 
@@ -346,7 +338,6 @@ impl<F: PrimeField> NLookup<F> {
 
             for j in (0..ell).rev() {
                 let xi = (i >> j) & 1;
-                println!("ENDIAN i {:#?} xi {:#?}", i, xi);
                 term *= F::from(xi as u64) * last_q[j]
                     + (F::one() - F::from(xi as u64)) * (F::one() - last_q[j]);
             }
@@ -372,17 +363,26 @@ mod tests {
 
         assert_eq!(q.len(), v.len());
 
-        let mut nl = NLookup::new(table, true);
+        let mut nl = NLookup::new(table, true, batch_size);
         let rounds = ((q.len() as f32) / (batch_size as f32)).ceil() as usize;
+        println!("ROUNDS {:#?}", rounds);
         let (mut running_q, mut running_v) = nl.first_running_claim();
 
         for i in 0..rounds {
+            println!(
+                "Round {:#?} q {:#?}, v {:#?}, rq {:#?}, rv {:#?}",
+                i,
+                q[(i * batch_size)..((i + 1) * batch_size)].to_vec(),
+                v[(i * batch_size)..((i + 1) * batch_size)].to_vec(),
+                running_q,
+                running_v,
+            );
             let cs = ConstraintSystem::<F>::new_ref();
             cs.set_optimization_goal(OptimizationGoal::Constraints);
             let res = nl.nlookup_circuit(
                 cs.clone(),
-                q[(i * batch_size)..(i + 1 * batch_size)].to_vec(),
-                v[(i * batch_size)..(i + 1 * batch_size)].to_vec(),
+                q[(i * batch_size)..((i + 1) * batch_size)].to_vec(),
+                v[(i * batch_size)..((i + 1) * batch_size)].to_vec(),
                 running_q,
                 running_v,
             );
@@ -419,7 +419,20 @@ mod tests {
         let v = vec![5, 3, 19, 5, 7, 9, 2, 3];
 
         run_nlookup(8, q.clone(), v.clone(), table.clone());
-        run_nlookup(4, q, v, table);
+        run_nlookup(4, q.clone(), v.clone(), table.clone());
+        run_nlookup(2, q.clone(), v.clone(), table.clone());
+        run_nlookup(1, q.clone(), v.clone(), table.clone());
+    }
+
+    #[test]
+    #[should_panic]
+    fn nl_bad_lookup() {
+        let table = vec![2, 3, 5, 7, 9, 13, 17, 19];
+
+        let q = vec![2, 1, 7];
+        let v = vec![5, 17, 19];
+
+        run_nlookup(3, q, v, table);
     }
 
     #[test]
@@ -427,9 +440,9 @@ mod tests {
         let mut evals = vec![F::from(2), F::from(6), F::from(5), F::from(14)];
 
         let table = evals.clone();
-        let mut nl = NLookup::new(table, true);
+        let mut nl = NLookup::new(table, true, 3);
 
-        let qs = vec![2, 1];
+        let qs = vec![2, 1, 1];
         let last_q = vec![F::from(5), F::from(4)];
 
         let rho = F::from(3);
@@ -481,7 +494,7 @@ mod tests {
         // eq_term = rhos * eq(qi, sc_rs_i)
         let mut eq_term = F::from(0);
         println!("loop");
-        for i in 0..2 {
+        for i in 0..qs.len() {
             let mut eq = F::from(1);
             for j in (0..nl.ell).rev() {
                 let qij = F::from(((qs[i] >> j) & 1) as u64);
@@ -504,10 +517,12 @@ mod tests {
             eq_term += rho_pow * eq;
         }
         // last q
+        sc_rs = sc_rs.into_iter().rev().collect();
         let mut eq = F::from(1);
-        for j in 0..nl.ell {
+        for j in (0..nl.ell).rev() {
             let qij = last_q[j];
-            eq *= qij * &sc_rs[j] + (F::from(1) - qij) * (F::from(1) - &sc_rs[j]);
+            eq *= qij * &sc_rs[nl.ell - j - 1]
+                + (F::from(1) - qij) * (F::from(1) - &sc_rs[nl.ell - j - 1]);
         }
         println!("last q eq term {:#?}", eq.clone());
         eq_term += eq;
@@ -515,14 +530,5 @@ mod tests {
 
         // (last) claim == eq_term * next_running_v
         assert_eq!(claim, eq_term * next_running_v);
-
-        /*    let (_, eq_term) = prover_mle_partial_eval(&claims, &sc_rs, &qs, false, Some(&last_q));
-                assert_eq!(
-                    claim, // last claim
-                    (eq_term * next_running_v.clone())
-                        .rem_floor(cfg().field().modulus())
-                        .keep_bits(255)
-                );
-        */
     }
 }
