@@ -39,17 +39,29 @@ pub struct NLookup<F: PrimeField> {
     table_t: Vec<F>,
     table_pub: bool, // T pub or priv?
     table_eq: Vec<F>,
+    padding_lookup: (usize, F),
 }
 
 // sumcheck for one round; q,v,eq table will change per round
 impl<F: PrimeField> NLookup<F> {
-    pub fn new(table_t: Vec<F>, table_pub: bool, num_lookups: usize) -> Self {
+    pub fn new(
+        table_t: Vec<F>,
+        table_pub: bool,
+        num_lookups: usize,
+        padding_lookup: Option<(usize, F)>,
+    ) -> Self {
         assert!(num_lookups > 0);
 
         let ell = logmn(table_t.len());
 
         let pcs: PoseidonConfig<F> =
             construct_poseidon_parameters_internal(2, 8, 56, 4, 5).unwrap(); //correct?
+
+        let padding = if padding_lookup.is_some() {
+            padding_lookup.unwrap()
+        } else {
+            (0, table_t[0])
+        };
 
         NLookup {
             ell,
@@ -58,6 +70,7 @@ impl<F: PrimeField> NLookup<F> {
             table_t,
             table_pub,
             table_eq: Vec::<F>::new(),
+            padding_lookup: padding,
         }
     }
 
@@ -75,27 +88,46 @@ impl<F: PrimeField> NLookup<F> {
     fn nlookup_circuit(
         &mut self,
         cs: ConstraintSystemRef<F>,
-        q: Vec<usize>,
-        v: Vec<F>,
+        lookups: &Vec<(usize, F)>,
         running_q: Vec<F>,
         running_v: F,
     ) -> Result<NLookupWires<F>, SynthesisError> {
-        assert_eq!(q.len(), v.len());
-        assert_eq!(self.m, q.len());
         assert_eq!(self.ell, running_q.len());
-        let num_lookups = v.len();
+        assert!(lookups.len() > 0);
+        assert!(lookups.len() <= self.m);
 
-        let mut q_vars = Vec::<(FpVar<F>, Vec<Boolean<F>>)>::new();
-        for qi in 0..q.len() {
-            let qi_var = FpVar::<F>::new_witness(cs.clone(), || Ok(F::from(q[qi] as u64)))?;
+        let mut q = Vec::<(FpVar<F>, Vec<Boolean<F>>)>::new();
+        let mut v = Vec::<FpVar<F>>::new();
+        for (qi, vi) in lookups.clone().into_iter() {
+            let qi_var = FpVar::<F>::new_witness(cs.clone(), || Ok(F::from(qi as u64)))?;
             let (qi_bits, _) = to_bits_le_with_top_bits_zero(&qi_var, self.ell)?;
-            q_vars.push((qi_var, qi_bits));
+            q.push((qi_var, qi_bits));
+
+            v.push(FpVar::<F>::new_witness(cs.clone(), || Ok(vi))?);
         }
 
-        let mut v_vars = Vec::<FpVar<F>>::new();
-        for vi in 0..v.len() {
-            v_vars.push(FpVar::<F>::new_witness(cs.clone(), || Ok(F::from(v[vi])))?);
+        while q.len() < self.m {
+            let qi_var =
+                FpVar::<F>::new_witness(cs.clone(), || Ok(F::from(self.padding_lookup.0 as u64)))?;
+            let (qi_bits, _) = to_bits_le_with_top_bits_zero(&qi_var, self.ell)?;
+            q.push((qi_var, qi_bits));
+
+            v.push(FpVar::<F>::new_witness(cs.clone(), || {
+                Ok(self.padding_lookup.1)
+            })?);
         }
+
+        println!(
+            "q {:#?}, v {:#?}",
+            q.clone()
+                .into_iter()
+                .map(|(val, b)| val.value().unwrap())
+                .collect::<Vec<F>>(),
+            v.clone()
+                .into_iter()
+                .map(|val| val.value().unwrap())
+                .collect::<Vec<F>>()
+        );
 
         let mut running_q_vars = Vec::<FpVar<F>>::new();
         for rqi in 0..running_q.len() {
@@ -112,7 +144,7 @@ impl<F: PrimeField> NLookup<F> {
         let mut query = Vec::<FpVar<F>>::new();
 
         query.extend(running_q_vars.clone());
-        query.extend(v_vars.clone());
+        query.extend(v.clone());
         query.extend(vec![running_v_var.clone()]);
         sponge.absorb(&query)?;
 
@@ -123,12 +155,17 @@ impl<F: PrimeField> NLookup<F> {
         // LHS of nl equation (vs and ros)
         // running q,v are the "constant" (not hooked to a rho)
         let mut horners_vals = vec![running_v_var.clone()];
-        horners_vals.extend(v_vars.clone());
+        horners_vals.extend(v.clone());
         let init_claim = horners(&horners_vals, &rho);
 
+        // clean this up :(
+        let mut temp_q: Vec<usize> = lookups.into_iter().map(|(x, v)| *x).collect();
+        while temp_q.len() < self.m {
+            temp_q.push(self.padding_lookup.0);
+        }
         let temp_eq = Self::gen_eq_table(
             rho.value().unwrap(),
-            &q,
+            &temp_q,
             &running_q.into_iter().rev().collect(),
         );
         let (next_running_q, last_claim) =
@@ -139,9 +176,9 @@ impl<F: PrimeField> NLookup<F> {
         let mut eq_evals =
             vec![self.bit_eq(&running_q_vars.into_iter().rev().collect(), &next_running_q)?]; //??
 
-        for i in 0..num_lookups {
+        for i in 0..self.m {
             let mut qi_vec = Vec::<FpVar<F>>::new();
-            for qij in q_vars[i].1.iter() {
+            for qij in q[i].1.iter() {
                 let qij_vec = qij.to_constraint_field()?;
                 assert_eq!(qij_vec.len(), 1);
                 qi_vec.push(qij_vec[0].clone());
@@ -165,8 +202,8 @@ impl<F: PrimeField> NLookup<F> {
         last_claim.enforce_equal(&(eq_eval * &next_running_v));
 
         Ok(NLookupWires {
-            q: q_vars,
-            v: v_vars,
+            q,
+            v,
             next_running_q,
             next_running_v,
         })
@@ -356,32 +393,34 @@ mod tests {
     use ark_pallas::Fr as F;
     use ark_relations::r1cs::{ConstraintSystem, OptimizationGoal};
 
-    fn run_nlookup(batch_size: usize, q: Vec<usize>, v_pre: Vec<usize>, table_pre: Vec<usize>) {
-        let v: Vec<F> = v_pre.into_iter().map(|x| F::from(x as u64)).collect();
+    fn run_nlookup(batch_size: usize, qv: Vec<(usize, usize)>, table_pre: Vec<usize>) {
+        let rounds = ((qv.len() as f32) / (batch_size as f32)).ceil() as usize;
+        println!("ROUNDS {:#?}", rounds);
+
+        let lookups: Vec<(usize, F)> = qv
+            .into_iter()
+            .map(|(q, v)| (q, F::from(v as u64)))
+            .collect();
         let table: Vec<F> = table_pre.into_iter().map(|x| F::from(x as u64)).collect();
 
-        assert_eq!(q.len(), v.len());
-
-        let mut nl = NLookup::new(table, true, batch_size);
-        let rounds = ((q.len() as f32) / (batch_size as f32)).ceil() as usize;
-        println!("ROUNDS {:#?}", rounds);
+        let mut nl = NLookup::new(table, true, batch_size, None);
         let (mut running_q, mut running_v) = nl.first_running_claim();
 
         for i in 0..rounds {
-            println!(
-                "Round {:#?} q {:#?}, v {:#?}, rq {:#?}, rv {:#?}",
-                i,
-                q[(i * batch_size)..((i + 1) * batch_size)].to_vec(),
-                v[(i * batch_size)..((i + 1) * batch_size)].to_vec(),
-                running_q,
-                running_v,
-            );
             let cs = ConstraintSystem::<F>::new_ref();
             cs.set_optimization_goal(OptimizationGoal::Constraints);
+
+            let lu_end = if (i + 1) * batch_size < lookups.len() {
+                (i + 1) * batch_size
+            } else {
+                lookups.len()
+            };
+
+            println!("lookups {:#?}", lookups[(i * batch_size)..lu_end].to_vec());
+
             let res = nl.nlookup_circuit(
                 cs.clone(),
-                q[(i * batch_size)..((i + 1) * batch_size)].to_vec(),
-                v[(i * batch_size)..((i + 1) * batch_size)].to_vec(),
+                &lookups[(i * batch_size)..lu_end].to_vec(),
                 running_q,
                 running_v,
             );
@@ -403,24 +442,30 @@ mod tests {
     #[test]
     fn nl_basic() {
         let table = vec![2, 3, 5, 7, 9, 13, 17, 19];
+        let lookups = vec![(2, 5), (1, 3), (7, 19)];
 
-        let q = vec![2, 1, 7];
-        let v = vec![5, 3, 19];
-
-        run_nlookup(3, q, v, table);
+        run_nlookup(3, lookups, table);
     }
 
     #[test]
     fn nl_many_lookups() {
         let table = vec![2, 3, 5, 7, 9, 13, 17, 19];
 
-        let q = vec![2, 1, 7, 2, 3, 4, 0, 1];
-        let v = vec![5, 3, 19, 5, 7, 9, 2, 3];
+        let lookups = vec![
+            (2, 5),
+            (1, 3),
+            (7, 19),
+            (2, 5),
+            (3, 7),
+            (4, 9),
+            (0, 2),
+            (1, 3),
+        ];
 
-        run_nlookup(8, q.clone(), v.clone(), table.clone());
-        run_nlookup(4, q.clone(), v.clone(), table.clone());
-        run_nlookup(2, q.clone(), v.clone(), table.clone());
-        run_nlookup(1, q.clone(), v.clone(), table.clone());
+        run_nlookup(8, lookups.clone(), table.clone());
+        run_nlookup(4, lookups.clone(), table.clone());
+        run_nlookup(2, lookups.clone(), table.clone());
+        run_nlookup(1, lookups.clone(), table.clone());
     }
 
     #[test]
@@ -428,10 +473,20 @@ mod tests {
     fn nl_bad_lookup() {
         let table = vec![2, 3, 5, 7, 9, 13, 17, 19];
 
-        let q = vec![2, 1, 7];
-        let v = vec![5, 17, 19];
+        let lookups = vec![(2, 5), (1, 13), (7, 19)];
+        run_nlookup(3, lookups, table);
+    }
 
-        run_nlookup(3, q, v, table);
+    #[test]
+    fn nl_padding() {
+        let table = vec![2, 3, 5, 7, 9, 13, 17, 19];
+        let lookups = vec![(2, 5), (1, 3), (7, 19)];
+
+        run_nlookup(4, lookups, table.clone());
+
+        let big_lookups = vec![(2, 5), (1, 3), (7, 19), (2, 5), (3, 7), (1, 3)];
+
+        run_nlookup(5, big_lookups, table);
     }
 
     #[test]
@@ -439,7 +494,7 @@ mod tests {
         let mut evals = vec![F::from(2), F::from(6), F::from(5), F::from(14)];
 
         let table = evals.clone();
-        let mut nl = NLookup::new(table, true, 3);
+        let mut nl = NLookup::new(table, true, 3, None);
 
         let qs = vec![2, 1, 1];
         let last_q = vec![F::from(5), F::from(4)];
