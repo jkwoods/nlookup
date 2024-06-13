@@ -118,8 +118,7 @@ impl<F: PrimeField> NLookup<F> {
 
         // sponge squeezed to produce rs
         let hash = sponge.squeeze_field_elements(1)?;
-        let temp = FpVar::one() + FpVar::one(); //&hash[0];
-        let rho = &temp;
+        let rho = &hash[0];
 
         // LHS of nl equation (vs and ros)
         // running q,v are the "constant" (not hooked to a rho)
@@ -205,7 +204,7 @@ impl<F: PrimeField> NLookup<F> {
 
             sponge.absorb(&vec![&g_j_const, &g_j_x, &g_j_xsq])?;
             let hash = sponge.squeeze_field_elements(1)?;
-            let r_j = &FpVar::one(); // &hash[0];
+            let r_j = &hash[0];
 
             claim = ((g_j_xsq * r_j) + g_j_x) * r_j + g_j_const;
 
