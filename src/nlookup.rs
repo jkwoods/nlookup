@@ -26,33 +26,71 @@ pub struct NLookupWires<F: PrimeField> {
 // we assume for now user is not interested in prev_running_q/v
 
 // TODO
-pub struct Table<F: PrimeField> {
-    t: Vec<F>,
+pub struct Table<'a, F: PrimeField> {
+    t: &'a Vec<F>,
     public: bool, // T pub or priv?
-    projs: Vec<(usize, usize)>,
+    projs: Option<Vec<(usize, usize)>>,
+}
+
+impl<'a, F: PrimeField> Table<'a, F> {
+    pub fn new(t: &'a Vec<F>, public: bool) -> Self {
+        Table {
+            t,
+            public,
+            projs: None,
+        }
+    }
+
+    pub fn new_proj(t: &'a Vec<F>, public: bool, projs: Vec<(usize, usize)>) -> Self {
+        Table {
+            t,
+            public,
+            projs: Some(projs),
+        }
+    }
 }
 
 pub struct NLookup<F: PrimeField> {
     ell: usize, // for "big" table
     m: usize,
     pcs: PoseidonConfig<F>,
-    table_t: Vec<F>,
-    table_pub: bool, // T pub or priv?
-    table_eq: Vec<F>,
+    table: Vec<F>,
     padding_lookup: (usize, F),
 }
 
 // sumcheck for one round; q,v,eq table will change per round
 impl<F: PrimeField> NLookup<F> {
-    pub fn new(
-        table_t: Vec<F>,
-        table_pub: bool,
+    pub fn new<'a>(
+        tables: &mut Vec<Table<'a, F>>,
         num_lookups: usize,
         padding_lookup: Option<(usize, F)>,
     ) -> Self {
         assert!(num_lookups > 0);
+        assert!(tables.len() > 0);
 
-        let ell = logmn(table_t.len());
+        tables.sort_by(|a, b| {
+            a.t.len()
+                .next_power_of_two()
+                .cmp(&b.t.len().next_power_of_two())
+        });
+
+        let mut table = Vec::<F>::new();
+        let cur_size = 0;
+        for t in tables {
+            // todo proj
+
+            let mut sub_table = t.t.clone();
+            sub_table.extend(vec![
+                F::zero();
+                sub_table.len().next_power_of_two() - sub_table.len()
+            ]);
+
+            table.extend(sub_table);
+
+            // cur_size += sub_table.len(); // TODO
+        }
+
+        let ell = logmn(table.len());
 
         let pcs: PoseidonConfig<F> =
             construct_poseidon_parameters_internal(2, 8, 56, 4, 5).unwrap(); //correct?
@@ -60,16 +98,14 @@ impl<F: PrimeField> NLookup<F> {
         let padding = if padding_lookup.is_some() {
             padding_lookup.unwrap()
         } else {
-            (0, table_t[0])
+            (0, table[0])
         };
 
         NLookup {
             ell,
             m: num_lookups,
             pcs,
-            table_t,
-            table_pub,
-            table_eq: Vec::<F>::new(),
+            table,
             padding_lookup: padding,
         }
     }
@@ -80,7 +116,7 @@ impl<F: PrimeField> NLookup<F> {
             running_q.push(F::zero());
         }
 
-        let running_v = self.table_t[0];
+        let running_v = self.table[0];
         (running_q, running_v)
     }
 
@@ -216,7 +252,7 @@ impl<F: PrimeField> NLookup<F> {
         mut sponge: PoseidonSpongeVar<F>,
         mut temp_eq: Vec<F>,
     ) -> Result<(Vec<FpVar<F>>, FpVar<F>), SynthesisError> {
-        let mut temp_table = self.table_t.clone(); // todo
+        let mut temp_table = self.table.clone(); // todo
 
         // current claim in each round
         let mut claim = init_claim.clone();
@@ -317,11 +353,11 @@ impl<F: PrimeField> NLookup<F> {
         assert_eq!(x.len(), self.ell);
 
         let chis = Self::evals(x);
-        assert_eq!(chis.len(), self.table_t.len());
+        assert_eq!(chis.len(), self.table.len());
 
         (0..chis.len())
             .into_iter()
-            .map(|i| chis[i] * self.table_t[i])
+            .map(|i| chis[i] * self.table[i])
             .reduce(|x, y| x + y)
             .unwrap()
     }
@@ -403,7 +439,7 @@ mod tests {
             .collect();
         let table: Vec<F> = table_pre.into_iter().map(|x| F::from(x as u64)).collect();
 
-        let mut nl = NLookup::new(table, true, batch_size, None);
+        let mut nl = NLookup::new(&mut vec![Table::new(&table, true)], batch_size, None);
         let (mut running_q, mut running_v) = nl.first_running_claim();
 
         for i in 0..rounds {
@@ -494,7 +530,7 @@ mod tests {
         let mut evals = vec![F::from(2), F::from(6), F::from(5), F::from(14)];
 
         let table = evals.clone();
-        let mut nl = NLookup::new(table, true, 3, None);
+        let mut nl = NLookup::new(&mut vec![Table::new(&table, true)], 3, None);
 
         let qs = vec![2, 1, 1];
         let last_q = vec![F::from(5), F::from(4)];
