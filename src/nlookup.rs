@@ -23,10 +23,11 @@ use std::collections::HashMap;
 pub struct NLookupWires<F: PrimeField> {
     q: Vec<(FpVar<F>, Vec<Boolean<F>>)>, // (field elt, bits)
     v: Vec<FpVar<F>>,
+    prev_running_q: Vec<FpVar<F>>,
+    prev_running_v: FpVar<F>,
     next_running_q: Vec<FpVar<F>>,
     next_running_v: FpVar<F>,
 }
-// we assume for now user is not interested in prev_running_q/v
 
 #[derive(Clone)]
 pub struct Table<'a, F: PrimeField> {
@@ -169,7 +170,7 @@ impl<F: PrimeField> NLookup<F> {
         &mut self,
         cs: ConstraintSystemRef<F>,
         lookups: &Vec<(usize, F, usize)>, // (q, v, table tag)
-        running_q: Vec<F>,                // TODO var
+        running_q: Vec<F>,
         running_v: F,
     ) -> Result<NLookupWires<F>, SynthesisError> {
         assert_eq!(self.ell, running_q.len());
@@ -308,6 +309,8 @@ impl<F: PrimeField> NLookup<F> {
         Ok(NLookupWires {
             q,
             v,
+            running_q_vars,
+            running_v_vars,
             next_running_q,
             next_running_v,
         })
