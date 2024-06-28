@@ -17,6 +17,8 @@ use ark_relations::{
     r1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisError, Variable},
 };
 use ark_std::test_rng;
+use itertools::Itertools;
+use std::collections::HashMap;
 
 pub struct NLookupWires<F: PrimeField> {
     q: Vec<(FpVar<F>, Vec<Boolean<F>>)>, // (field elt, bits)
@@ -26,27 +28,35 @@ pub struct NLookupWires<F: PrimeField> {
 }
 // we assume for now user is not interested in prev_running_q/v
 
-// TODO
+#[derive(Clone)]
 pub struct Table<'a, F: PrimeField> {
     t: &'a Vec<F>,
-    public: bool, // T pub or priv?
+    priv_cmt: Option<F>, // T pub or priv?
     projs: Option<Vec<(usize, usize)>>,
+    tag: usize,
 }
 
 impl<'a, F: PrimeField> Table<'a, F> {
-    pub fn new(t: &'a Vec<F>, public: bool) -> Self {
+    pub fn new(t: &'a Vec<F>, priv_cmt: Option<F>, tag: usize) -> Self {
         Table {
             t,
-            public,
+            priv_cmt,
             projs: None,
+            tag,
         }
     }
 
-    pub fn new_proj(t: &'a Vec<F>, public: bool, projs: Vec<(usize, usize)>) -> Self {
+    pub fn new_proj(
+        t: &'a Vec<F>,
+        priv_cmt: Option<F>,
+        projs: Vec<(usize, usize)>,
+        tag: usize,
+    ) -> Self {
         Table {
             t,
-            public,
+            priv_cmt,
             projs: Some(projs),
+            tag,
         }
     }
 }
@@ -56,29 +66,51 @@ pub struct NLookup<F: PrimeField> {
     m: usize,
     pcs: PoseidonConfig<F>,
     table: Vec<F>,
+    priv_cmts: Vec<F>,
+    tag_to_loc: HashMap<usize, usize>,
     padding_lookup: (usize, F),
 }
 
-// sumcheck for one round; q,v,eq table will change per round
+// initialize nlookup table, allowed to call circuit for multiple rounds
+// takes Tables with unique tags, the number of lookups per round
+// optionally, you can specify what "lookup" is used to pad non-full batches
 impl<F: PrimeField> NLookup<F> {
     pub fn new<'a>(
-        tables: &mut Vec<Table<'a, F>>,
+        mut tables: Vec<Table<'a, F>>,
         num_lookups: usize,
         padding_lookup: Option<(usize, F)>,
     ) -> Self {
         assert!(num_lookups > 0);
         assert!(tables.len() > 0);
 
+        let unique_tags: Vec<Table<'a, F>> =
+            tables.clone().into_iter().unique_by(|t| t.tag).collect();
+        assert_eq!(unique_tags.len(), tables.len(), "Duplicate tags on tables");
+
+        // todo proj
         tables.sort_by(|a, b| {
             a.t.len()
                 .next_power_of_two()
                 .cmp(&b.t.len().next_power_of_two())
         });
+        tables = tables.into_iter().rev().collect::<Vec<Table<'a, F>>>();
 
+        let mut remaining_table_size = tables
+            .clone()
+            .into_iter()
+            .map(|t| t.t.len())
+            .sum::<usize>()
+            .next_power_of_two();
         let mut table = Vec::<F>::new();
-        let cur_size = 0;
+        let mut priv_cmts = Vec::<F>::new();
+        let mut tag_to_loc = HashMap::<usize, usize>::new();
+
         for t in tables {
-            // todo proj
+            match t.priv_cmt {
+                Some(cmt) => priv_cmts.push(cmt),
+                None => (),
+            }
+            tag_to_loc.insert(t.tag, table.len());
 
             let mut sub_table = t.t.clone();
             sub_table.extend(vec![
@@ -86,10 +118,10 @@ impl<F: PrimeField> NLookup<F> {
                 sub_table.len().next_power_of_two() - sub_table.len()
             ]);
 
+            remaining_table_size -= sub_table.len();
             table.extend(sub_table);
-
-            // cur_size += sub_table.len(); // TODO
         }
+        table.extend(vec![F::zero(); remaining_table_size]);
 
         let ell = logmn(table.len());
 
@@ -97,16 +129,26 @@ impl<F: PrimeField> NLookup<F> {
             construct_poseidon_parameters_internal(2, 8, 56, 4, 5).unwrap(); //correct?
 
         let padding = if padding_lookup.is_some() {
-            padding_lookup.unwrap()
+            let pd = padding_lookup.unwrap();
+            assert_eq!(table[pd.0], pd.1, "specified padding not in table");
+            pd
         } else {
             (0, table[0])
         };
+
+        println!(
+            "OFFSETS {:#?}, TABLE {:#?}",
+            tag_to_loc.clone(),
+            table.clone()
+        );
 
         NLookup {
             ell,
             m: num_lookups,
             pcs,
             table,
+            priv_cmts,
+            tag_to_loc,
             padding_lookup: padding,
         }
     }
@@ -121,12 +163,13 @@ impl<F: PrimeField> NLookup<F> {
         (running_q, running_v)
     }
 
+    // circuit for a round of lookups
     // qs, vs taken in just as witnesses, fpvar wires returned
     pub fn nlookup_circuit(
         &mut self,
         cs: ConstraintSystemRef<F>,
-        lookups: &Vec<(usize, F)>,
-        running_q: Vec<F>,
+        lookups: &Vec<(usize, F, usize)>, // (q, v, table tag)
+        running_q: Vec<F>,                // TODO var
         running_v: F,
     ) -> Result<NLookupWires<F>, SynthesisError> {
         assert_eq!(self.ell, running_q.len());
@@ -134,19 +177,30 @@ impl<F: PrimeField> NLookup<F> {
         assert!(lookups.len() <= self.m);
 
         let mut q = Vec::<(FpVar<F>, Vec<Boolean<F>>)>::new();
+        let mut q_usize = Vec::<usize>::new();
         let mut v = Vec::<FpVar<F>>::new();
-        for (qi, vi) in lookups.clone().into_iter() {
-            let qi_var = FpVar::<F>::new_witness(cs.clone(), || Ok(F::from(qi as u64)))?;
+        let mut all_q_bits = Vec::<Boolean<F>>::new();
+        for (qi, vi, tagi) in lookups.clone().into_iter() {
+            let offset = self.tag_to_loc[&tagi];
+            q_usize.push(qi + offset);
+            // sanity
+            assert_eq!(self.table[qi + offset], vi);
+
+            let qi_var = FpVar::<F>::new_witness(cs.clone(), || Ok(F::from((qi + offset) as u64)))?; // change
+                                                                                                     // later?
             let (qi_bits, _) = qi_var.to_bits_le_with_top_bits_zero(self.ell)?;
+            all_q_bits.extend(qi_bits.clone());
             q.push((qi_var, qi_bits));
 
             v.push(FpVar::<F>::new_witness(cs.clone(), || Ok(vi))?);
         }
 
         while q.len() < self.m {
+            q_usize.push(self.padding_lookup.0);
             let qi_var =
                 FpVar::<F>::new_witness(cs.clone(), || Ok(F::from(self.padding_lookup.0 as u64)))?;
             let (qi_bits, _) = qi_var.to_bits_le_with_top_bits_zero(self.ell)?;
+            all_q_bits.extend(qi_bits.clone());
             q.push((qi_var, qi_bits));
 
             v.push(FpVar::<F>::new_witness(cs.clone(), || {
@@ -173,13 +227,31 @@ impl<F: PrimeField> NLookup<F> {
         let running_v_var = FpVar::<F>::new_witness(cs.clone(), || Ok(F::from(running_v)))?;
 
         // q processing (combine)
-        // TODO
+        let mut combined_qs = Vec::new();
+        while !all_q_bits.is_empty() {
+            let mut bits = Vec::new();
+            let mut i = 0;
+            while let Some(bit) = all_q_bits.pop() {
+                if i < (F::MODULUS_BIT_SIZE as usize - 1) {
+                    bits.push(bit);
+                    i += 1;
+                } else {
+                    break;
+                };
+            }
+            combined_qs.push(Boolean::le_bits_to_fp(&bits)?);
+        }
+
         let mut sponge = PoseidonSpongeVar::<F>::new(cs.clone(), &self.pcs);
 
         // sponge aborbs qs, vs, running q, running v, and possibly doc commit
-        // TODO
         let mut query = Vec::<FpVar<F>>::new();
-
+        for cmt in &self.priv_cmts {
+            query.push(FpVar::<F>::new_witness(cs.clone(), || {
+                Ok(F::from(cmt.clone()))
+            })?);
+        }
+        query.extend(combined_qs);
         query.extend(running_q_vars.clone());
         query.extend(v.clone());
         query.extend(vec![running_v_var.clone()]);
@@ -195,14 +267,9 @@ impl<F: PrimeField> NLookup<F> {
         horners_vals.extend(v.clone());
         let init_claim = horners(&horners_vals, &rho);
 
-        // clean this up :(
-        let mut temp_q: Vec<usize> = lookups.into_iter().map(|(x, v)| *x).collect();
-        while temp_q.len() < self.m {
-            temp_q.push(self.padding_lookup.0);
-        }
         let temp_eq = Self::gen_eq_table(
             rho.value().unwrap(),
-            &temp_q,
+            &q_usize,
             &running_q.into_iter().rev().collect(),
         );
         let (next_running_q, last_claim) =
@@ -430,17 +497,20 @@ mod tests {
     use ark_pallas::Fr as F;
     use ark_relations::r1cs::{ConstraintSystem, OptimizationGoal};
 
-    fn run_nlookup(batch_size: usize, qv: Vec<(usize, usize)>, table_pre: Vec<usize>) {
+    fn run_nlookup<'a>(
+        batch_size: usize,
+        qv: Vec<(usize, usize, usize)>,
+        tables: Vec<Table<'a, F>>,
+    ) {
         let rounds = ((qv.len() as f32) / (batch_size as f32)).ceil() as usize;
         println!("ROUNDS {:#?}", rounds);
 
-        let lookups: Vec<(usize, F)> = qv
+        let lookups: Vec<(usize, F, usize)> = qv
             .into_iter()
-            .map(|(q, v)| (q, F::from(v as u64)))
+            .map(|(q, v, t)| (q, F::from(v as u64), t))
             .collect();
-        let table: Vec<F> = table_pre.into_iter().map(|x| F::from(x as u64)).collect();
 
-        let mut nl = NLookup::new(&mut vec![Table::new(&table, true)], batch_size, None);
+        let mut nl = NLookup::new(tables, batch_size, None);
         let (mut running_q, mut running_v) = nl.first_running_claim();
 
         for i in 0..rounds {
@@ -478,52 +548,131 @@ mod tests {
 
     #[test]
     fn nl_basic() {
-        let table = vec![2, 3, 5, 7, 9, 13, 17, 19];
-        let lookups = vec![(2, 5), (1, 3), (7, 19)];
+        let t_pre = vec![2, 3, 5, 7, 9, 13, 17, 19];
+        let t: Vec<F> = t_pre.into_iter().map(|x| F::from(x as u64)).collect();
+        let table = Table::new(&t, None, 0);
 
-        run_nlookup(3, lookups, table);
+        let lookups = vec![(2, 5, 0), (1, 3, 0), (7, 19, 0)];
+
+        run_nlookup(3, lookups, vec![table]);
     }
 
     #[test]
     fn nl_many_lookups() {
-        let table = vec![2, 3, 5, 7, 9, 13, 17, 19];
+        let t_pre = vec![2, 3, 5, 7, 9, 13, 17, 19];
+        let t: Vec<F> = t_pre.into_iter().map(|x| F::from(x as u64)).collect();
+        let table = Table::new(&t, None, 0);
 
         let lookups = vec![
-            (2, 5),
-            (1, 3),
-            (7, 19),
-            (2, 5),
-            (3, 7),
-            (4, 9),
-            (0, 2),
-            (1, 3),
+            (2, 5, 0),
+            (1, 3, 0),
+            (7, 19, 0),
+            (2, 5, 0),
+            (3, 7, 0),
+            (4, 9, 0),
+            (0, 2, 0),
+            (1, 3, 0),
         ];
 
-        run_nlookup(8, lookups.clone(), table.clone());
-        run_nlookup(4, lookups.clone(), table.clone());
-        run_nlookup(2, lookups.clone(), table.clone());
-        run_nlookup(1, lookups.clone(), table.clone());
+        run_nlookup(8, lookups.clone(), vec![table.clone()]);
+        run_nlookup(4, lookups.clone(), vec![table.clone()]);
+        run_nlookup(2, lookups.clone(), vec![table.clone()]);
+        run_nlookup(1, lookups.clone(), vec![table.clone()]);
     }
 
     #[test]
     #[should_panic]
     fn nl_bad_lookup() {
-        let table = vec![2, 3, 5, 7, 9, 13, 17, 19];
+        let t_pre = vec![2, 3, 5, 7, 9, 13, 17, 19];
+        let t: Vec<F> = t_pre.into_iter().map(|x| F::from(x as u64)).collect();
+        let table = Table::new(&t, None, 0);
 
-        let lookups = vec![(2, 5), (1, 13), (7, 19)];
-        run_nlookup(3, lookups, table);
+        let lookups = vec![(2, 5, 0), (1, 13, 0), (7, 19, 0)];
+        run_nlookup(3, lookups, vec![table]);
     }
 
     #[test]
     fn nl_padding() {
-        let table = vec![2, 3, 5, 7, 9, 13, 17, 19];
-        let lookups = vec![(2, 5), (1, 3), (7, 19)];
+        let t_pre = vec![2, 3, 5, 7, 9, 13, 17, 19];
+        let t: Vec<F> = t_pre.into_iter().map(|x| F::from(x as u64)).collect();
+        let table = Table::new(&t, None, 0);
 
-        run_nlookup(4, lookups, table.clone());
+        let lookups = vec![(2, 5, 0), (1, 3, 0), (7, 19, 0)];
 
-        let big_lookups = vec![(2, 5), (1, 3), (7, 19), (2, 5), (3, 7), (1, 3)];
+        run_nlookup(4, lookups, vec![table.clone()]);
 
-        run_nlookup(5, big_lookups, table);
+        let big_lookups = vec![
+            (2, 5, 0),
+            (1, 3, 0),
+            (7, 19, 0),
+            (2, 5, 0),
+            (3, 7, 0),
+            (1, 3, 0),
+        ];
+
+        run_nlookup(5, big_lookups, vec![table]);
+    }
+
+    #[test]
+    fn nl_hybrid() {
+        let t_pre = vec![2, 3, 5, 7, 9, 13, 17, 19];
+        let t: Vec<F> = t_pre.into_iter().map(|x| F::from(x as u64)).collect();
+        let pub_table = Table::new(&t, None, 0);
+
+        let t_pre = vec![23, 29, 31, 37, 41, 43, 47, 53];
+        let t: Vec<F> = t_pre.into_iter().map(|x| F::from(x as u64)).collect();
+        let priv_table = Table::new(&t, Some(F::from(593)), 1);
+
+        let lookups = vec![(2, 5, 0), (1, 3, 0), (0, 23, 1), (4, 41, 1)];
+
+        run_nlookup(2, lookups, vec![pub_table, priv_table]);
+    }
+
+    #[test]
+    fn nl_hybrid_size() {
+        let t_pre = vec![2, 3, 5];
+        let t: Vec<F> = t_pre.into_iter().map(|x| F::from(x as u64)).collect();
+        let pub_table = Table::new(&t, None, 19);
+
+        let t_pre = vec![23, 29, 31, 37, 41, 43, 47, 53];
+        let t: Vec<F> = t_pre.into_iter().map(|x| F::from(x as u64)).collect();
+        let priv_table = Table::new(&t, Some(F::from(593)), 1);
+
+        let lookups = vec![(2, 5, 19), (1, 3, 19), (0, 2, 19), (0, 23, 1), (4, 41, 1)];
+
+        run_nlookup(2, lookups, vec![pub_table, priv_table]);
+    }
+
+    #[test]
+    #[should_panic]
+    fn nl_hybrid_dup_tags() {
+        let t_pre = vec![2, 3, 5, 7, 9, 13, 17, 19];
+        let t: Vec<F> = t_pre.into_iter().map(|x| F::from(x as u64)).collect();
+        let pub_table = Table::new(&t, None, 4);
+
+        let t_pre = vec![23, 29, 31, 37, 41, 43, 47, 53];
+        let t: Vec<F> = t_pre.into_iter().map(|x| F::from(x as u64)).collect();
+        let priv_table = Table::new(&t, Some(F::from(593)), 4);
+
+        let lookups = vec![(2, 5, 0), (1, 3, 0), (0, 23, 1), (4, 41, 1)];
+
+        run_nlookup(2, lookups, vec![pub_table, priv_table]);
+    }
+
+    #[test]
+    #[should_panic]
+    fn nl_hybrid_bad_tags() {
+        let t_pre = vec![2, 3, 5, 7, 9, 13, 17, 19];
+        let t: Vec<F> = t_pre.into_iter().map(|x| F::from(x as u64)).collect();
+        let pub_table = Table::new(&t, None, 0);
+
+        let t_pre = vec![23, 29, 31, 37, 41, 43, 47, 53];
+        let t: Vec<F> = t_pre.into_iter().map(|x| F::from(x as u64)).collect();
+        let priv_table = Table::new(&t, Some(F::from(593)), 1);
+
+        let lookups = vec![(2, 5, 0), (1, 3, 1), (0, 23, 1), (4, 41, 1)];
+
+        run_nlookup(2, lookups, vec![pub_table, priv_table]);
     }
 
     #[test]
@@ -531,7 +680,7 @@ mod tests {
         let mut evals = vec![F::from(2), F::from(6), F::from(5), F::from(14)];
 
         let table = evals.clone();
-        let mut nl = NLookup::new(&mut vec![Table::new(&table, true)], 3, None);
+        let mut nl = NLookup::new(vec![Table::new(&table, None, 0)], 3, None);
 
         let qs = vec![2, 1, 1];
         let last_q = vec![F::from(5), F::from(4)];
