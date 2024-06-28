@@ -50,30 +50,3 @@ pub(crate) fn construct_poseidon_parameters_internal<F: PrimeField>(
         capacity: 1,
     })
 }
-
-// arkworks in devel
-// https://github.com/arkworks-rs/r1cs-std/blob/4020fbc22625621baa8125ede87abaeac3c1ca26/src/fields/fp/mod.rs#L58
-/// Decomposes fp into a vector of `bits` and a remainder `rest` such that
-/// * `bits.len() == size`, and
-/// * `rest == 0`.
-pub fn to_bits_le_with_top_bits_zero<F: PrimeField>(
-    fp: &FpVar<F>,
-    size: usize,
-) -> Result<(Vec<Boolean<F>>, FpVar<F>), SynthesisError> {
-    assert!(size <= F::MODULUS_BIT_SIZE as usize - 1);
-    let cs = fp.cs();
-    let mode = if fp.is_constant() {
-        AllocationMode::Constant
-    } else {
-        AllocationMode::Witness
-    };
-
-    let value = fp.value().map(|f| f.into_bigint());
-    let lower_bits = (0..size)
-        .map(|i| Boolean::new_variable(cs.clone(), || value.map(|v| v.get_bit(i as usize)), mode))
-        .collect::<Result<Vec<_>, _>>()?;
-    let lower_bits_fp = Boolean::le_bits_to_fp_var(&lower_bits)?;
-    let rest = fp - &lower_bits_fp;
-    rest.enforce_equal(&FpVar::<F>::zero())?;
-    Ok((lower_bits, rest))
-}
