@@ -7,9 +7,10 @@ use ark_ff::PrimeField;
 use ark_r1cs_std::{
     alloc::{AllocVar, AllocationMode},
     boolean::Boolean,
+    convert::ToConstraintFieldGadget,
     eq::EqGadget,
     fields::{fp::FpVar, FieldVar},
-    R1CSVar, ToConstraintFieldGadget,
+    R1CSVar,
 };
 use ark_relations::{
     lc, ns,
@@ -121,7 +122,7 @@ impl<F: PrimeField> NLookup<F> {
     }
 
     // qs, vs taken in just as witnesses, fpvar wires returned
-    fn nlookup_circuit(
+    pub fn nlookup_circuit(
         &mut self,
         cs: ConstraintSystemRef<F>,
         lookups: &Vec<(usize, F)>,
@@ -136,7 +137,7 @@ impl<F: PrimeField> NLookup<F> {
         let mut v = Vec::<FpVar<F>>::new();
         for (qi, vi) in lookups.clone().into_iter() {
             let qi_var = FpVar::<F>::new_witness(cs.clone(), || Ok(F::from(qi as u64)))?;
-            let (qi_bits, _) = to_bits_le_with_top_bits_zero(&qi_var, self.ell)?;
+            let (qi_bits, _) = qi_var.to_bits_le_with_top_bits_zero(self.ell)?;
             q.push((qi_var, qi_bits));
 
             v.push(FpVar::<F>::new_witness(cs.clone(), || Ok(vi))?);
@@ -145,7 +146,7 @@ impl<F: PrimeField> NLookup<F> {
         while q.len() < self.m {
             let qi_var =
                 FpVar::<F>::new_witness(cs.clone(), || Ok(F::from(self.padding_lookup.0 as u64)))?;
-            let (qi_bits, _) = to_bits_le_with_top_bits_zero(&qi_var, self.ell)?;
+            let (qi_bits, _) = qi_var.to_bits_le_with_top_bits_zero(self.ell)?;
             q.push((qi_var, qi_bits));
 
             v.push(FpVar::<F>::new_witness(cs.clone(), || {
