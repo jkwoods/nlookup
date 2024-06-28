@@ -278,8 +278,10 @@ impl<F: PrimeField> NLookup<F> {
 
         // last_claim & eq circuit
         // TODO CLONE REV CLEAN UP
-        let mut eq_evals =
-            vec![self.bit_eq(&running_q_vars.into_iter().rev().collect(), &next_running_q)?]; //??
+        let mut eq_evals = vec![self.bit_eq(
+            &running_q_vars.clone().into_iter().rev().collect(),
+            &next_running_q,
+        )?]; //??
 
         for i in 0..self.m {
             let mut qi_vec = Vec::<FpVar<F>>::new();
@@ -309,8 +311,8 @@ impl<F: PrimeField> NLookup<F> {
         Ok(NLookupWires {
             q,
             v,
-            running_q_vars,
-            running_v_vars,
+            prev_running_q: running_q_vars,
+            prev_running_v: running_v_var,
             next_running_q,
             next_running_v,
         })
