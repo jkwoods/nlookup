@@ -67,6 +67,8 @@ impl<'a, F: PrimeField> Table<'a, F> {
             let real_start = range.0;
             let real_end = range.1;
 
+            println!("real start {:#?}, real end {:#?}", real_start, real_end);
+
             assert!(real_start >= 0);
             assert!(real_end <= t.len().next_power_of_two());
 
@@ -74,7 +76,7 @@ impl<'a, F: PrimeField> Table<'a, F> {
             let mut start = 0;
             let mut chunk_len = end;
 
-            while chunk_len >= 1 {
+            while chunk_len > 1 {
                 let mut s = 0;
                 while s + chunk_len <= real_start {
                     s += chunk_len;
@@ -86,11 +88,16 @@ impl<'a, F: PrimeField> Table<'a, F> {
                     end = e;
 
                     // try to go smaller
-                    chunk_len = chunk_len / 2;
+                    if chunk_len > 1 {
+                        chunk_len = chunk_len / 2;
+                    }
                 } else {
                     break;
                 }
             }
+
+            println!("found start {:#?}, found end {:#?}", start, end);
+            println!("chunk len {:#?}", chunk_len);
 
             assert!(chunk_len.next_power_of_two() == chunk_len);
             assert!(start <= real_start);
@@ -167,7 +174,7 @@ pub struct NLookup<F: PrimeField> {
     pcs: PoseidonConfig<F>,
     table: Vec<F>,
     priv_cmts: Vec<F>,
-    tag_to_loc: HashMap<usize, Vec<(Range<usize>, usize)>>,
+    tag_to_loc: HashMap<usize, Vec<(Range<usize>, isize)>>,
     padding_lookup: (usize, F),
 }
 
@@ -235,11 +242,12 @@ impl<F: PrimeField> NLookup<F> {
             .next_power_of_two();
 
         let mut table = Vec::<F>::new();
-        let mut tag_to_loc = HashMap::<usize, Vec<(Range<usize>, usize)>>::new();
+        let mut tag_to_loc = HashMap::<usize, Vec<(Range<usize>, isize)>>::new();
         // TODO: make sure projections and hybrid make sense?
 
         for (st, tag, proj) in sub_tables {
-            let offset = table.len() - proj.0;
+            println!("table len {:#?}, proj 0 {:#?}", table.len(), proj.0);
+            let offset = (table.len() as isize) - (proj.0 as isize);
             let range = proj.0..proj.1;
             match tag_to_loc.remove(&tag) {
                 Some(mut offset_vec) => {
@@ -315,7 +323,7 @@ impl<F: PrimeField> NLookup<F> {
         let mut v = Vec::<FpVar<F>>::new();
         let mut all_q_bits = Vec::<Boolean<F>>::new();
         for (qi, vi, tagi) in lookups.clone().into_iter() {
-            let mut offset = 0 as usize;
+            let mut offset = 0 as isize;
             let mut in_range = false;
             for (range, o) in &self.tag_to_loc[&tagi] {
                 if range.contains(&qi) {
@@ -325,12 +333,14 @@ impl<F: PrimeField> NLookup<F> {
             }
             assert!(in_range, "q not in range of table projections");
 
-            q_usize.push(qi + offset);
+            let actual_idx = qi as isize + offset;
+            assert!(actual_idx >= 0);
+            q_usize.push(actual_idx as usize);
             // sanity
-            assert_eq!(self.table[qi + offset], vi);
+            assert_eq!(self.table[actual_idx as usize], vi);
 
-            let qi_var = FpVar::<F>::new_witness(cs.clone(), || Ok(F::from((qi + offset) as u64)))?; // change
-                                                                                                     // later?
+            let qi_var = FpVar::<F>::new_witness(cs.clone(), || Ok(F::from(actual_idx as u64)))?; // change
+                                                                                                  // later?
             let (qi_bits, _) = qi_var.to_bits_le_with_top_bits_zero(self.ell)?;
             all_q_bits.extend(qi_bits.clone());
             q.push((qi_var, qi_bits));
@@ -847,6 +857,89 @@ mod tests {
                 Some(proj) => assert_eq!(table.proj.unwrap(), proj),
                 None => assert!(table.proj.is_none()),
             }
+        }
+    }
+
+    #[test]
+    fn nl_proj() {
+        let t_pre = vec![23, 29, 31, 37, 41, 43, 47, 53];
+        let t: Vec<F> = t_pre.into_iter().map(|x| F::from(x as u64)).collect();
+
+        let tests = vec![
+            (vec![(0, 8)], vec![(2, 31, 1), (0, 23, 1), (4, 41, 1)]),
+            (vec![(0, 4)], vec![(2, 31, 1), (0, 23, 1), (1, 29, 1)]),
+            (vec![(4, 8)], vec![(4, 41, 1), (7, 53, 1), (6, 47, 1)]),
+            (
+                vec![(0, 2), (4, 6)],
+                vec![(4, 41, 1), (0, 23, 1), (5, 43, 1)],
+            ),
+            (
+                vec![(0, 2), (2, 4)],
+                vec![(0, 23, 1), (3, 37, 1), (1, 29, 1)],
+            ),
+        ];
+
+        for (ranges, lookups) in tests {
+            let table = Table::new_proj(&t, None, ranges, 1);
+
+            run_nlookup(2, lookups, vec![table]);
+        }
+    }
+
+    #[test]
+    #[should_panic]
+    fn nl_proj_bad() {
+        let t_pre = vec![23, 29, 31, 37, 41, 43, 47, 53];
+        let t: Vec<F> = t_pre.into_iter().map(|x| F::from(x as u64)).collect();
+
+        let ranges = vec![(1, 4), (6, 8)];
+        let table = Table::new_proj(&t, None, ranges, 1);
+
+        let lookups = vec![(1, 23, 1), (5, 43, 1)];
+        run_nlookup(2, lookups, vec![table]);
+    }
+
+    #[test]
+    fn nl_hybrid_and_proj() {
+        let t_pre = vec![2, 3, 5, 7, 9, 13, 17, 19];
+        let pub_t: Vec<F> = t_pre.into_iter().map(|x| F::from(x as u64)).collect();
+
+        let t_pre = vec![23, 29, 31, 37, 41, 43, 47, 53];
+        let priv_t: Vec<F> = t_pre.into_iter().map(|x| F::from(x as u64)).collect();
+
+        let tests = vec![
+            (
+                vec![(0, 8)],
+                vec![(0, 8)],
+                vec![(2, 5, 0), (0, 23, 1), (4, 41, 1)],
+            ),
+            (
+                vec![(0, 4)],
+                vec![(0, 2), (6, 8)],
+                vec![(3, 7, 0), (0, 23, 1), (6, 47, 1)],
+            ),
+            (
+                vec![(4, 8)],
+                vec![(2, 3), (7, 8)],
+                vec![(4, 9, 0), (7, 19, 0), (2, 31, 1), (7, 53, 1)],
+            ),
+            (
+                vec![(0, 8)],
+                vec![(0, 2), (4, 6)],
+                vec![(4, 41, 1), (0, 23, 1), (5, 13, 0)],
+            ),
+            (
+                vec![(0, 2), (2, 4)],
+                vec![(1, 7)],
+                vec![(0, 2, 0), (3, 7, 0), (5, 43, 1)],
+            ),
+        ];
+
+        for (pub_ranges, priv_ranges, lookups) in tests {
+            let pub_table = Table::new_proj(&pub_t, None, pub_ranges, 0);
+            let priv_table = Table::new_proj(&priv_t, None, priv_ranges, 1);
+
+            run_nlookup(2, lookups, vec![pub_table, priv_table]);
         }
     }
 
