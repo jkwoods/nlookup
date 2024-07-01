@@ -19,6 +19,7 @@ use ark_relations::{
 use ark_std::test_rng;
 use itertools::Itertools;
 use std::collections::HashMap;
+use std::ops::Range;
 
 pub struct NLookupWires<F: PrimeField> {
     q: Vec<(FpVar<F>, Vec<Boolean<F>>)>, // (field elt, bits)
@@ -33,7 +34,7 @@ pub struct NLookupWires<F: PrimeField> {
 pub struct Table<'a, F: PrimeField> {
     t: &'a Vec<F>,
     priv_cmt: Option<F>, // T pub or priv?
-    projs: Option<Vec<(usize, usize)>>,
+    proj: Option<Vec<(usize, usize)>>,
     tag: usize,
 }
 
@@ -42,22 +43,127 @@ impl<'a, F: PrimeField> Table<'a, F> {
         Table {
             t,
             priv_cmt,
-            projs: None,
+            proj: None,
             tag,
         }
     }
 
+    // ranges are (inclusive, exclusive]. i.e. the first half of a table of len 8 is (0,4)
+    // automatically will find smallest valid projection given each range
+    // you can include as many distinct ranges as you want,
+    // func will automatically combine when valid
+    // please do not abuse (i.e. a million len 1 ranges), func does not account for human stupidity
     pub fn new_proj(
         t: &'a Vec<F>,
         priv_cmt: Option<F>,
-        projs: Vec<(usize, usize)>,
+        ranges: Vec<(usize, usize)>,
         tag: usize,
     ) -> Self {
-        Table {
-            t,
-            priv_cmt,
-            projs: Some(projs),
-            tag,
+        let mut proj = Vec::new();
+        assert!(ranges.len() >= 1);
+
+        for range in ranges {
+            // adjust proj
+            let real_start = range.0;
+            let real_end = range.1;
+
+            println!("real start {:#?}, real end {:#?}", real_start, real_end);
+
+            assert!(real_start >= 0);
+            assert!(real_end <= t.len().next_power_of_two());
+
+            let mut end = t.len().next_power_of_two();
+            let mut start = 0;
+            let mut chunk_len = end;
+
+            while chunk_len > 1 {
+                let mut s = 0;
+                while s + chunk_len <= real_start {
+                    s += chunk_len;
+                }
+
+                let mut e = s + chunk_len;
+                if e >= real_end {
+                    start = s;
+                    end = e;
+
+                    // try to go smaller
+                    if chunk_len > 1 {
+                        chunk_len = chunk_len / 2;
+                    }
+                } else {
+                    break;
+                }
+            }
+
+            println!("found start {:#?}, found end {:#?}", start, end);
+            println!("chunk len {:#?}", chunk_len);
+
+            assert!(chunk_len.next_power_of_two() == chunk_len);
+            assert!(start <= real_start);
+            assert!(end >= real_end);
+            assert!(start % chunk_len == 0);
+
+            if chunk_len != t.len().next_power_of_two() {
+                proj.push((start, end));
+            }
+        }
+
+        // elim overlap
+        proj.sort_by(|a, b| a.0.cmp(&b.0));
+
+        let mut i = 0;
+        while i < (proj.len() - 1) {
+            let a = proj[i];
+            let b = proj[i + 1];
+            if a.0 == b.0 && a.1 <= b.1 {
+                // first inside second
+                proj.remove(i);
+            } else if a.0 <= b.0 && a.1 >= b.1 {
+                // second inside first
+                proj.remove(i + 1);
+            } else {
+                i += 1;
+            }
+        }
+
+        let mut i = 0;
+        while i < (proj.len() - 1) {
+            let a = proj[i];
+            let b = proj[i + 1];
+            if a.1 == b.0 && (a.1 - a.0 == b.1 - b.0) && (a.0 % (b.1 - a.0) == 0) {
+                // check if can merge
+                proj.remove(i + 1);
+                proj.remove(i);
+                proj.insert(i, (a.0, b.1));
+            } else {
+                i += 1;
+            }
+        }
+
+        // confirm seperate
+        for i in 0..(proj.len() - 1) {
+            let a = proj[i];
+            let b = proj[i + 1];
+            assert!(a.1 <= b.0);
+        }
+
+        if proj.len() == 0 {
+            panic!("Projection calcualtion bad");
+        } else if proj.len() == 1 && proj[0].0 == 0 && proj[0].1 == t.len().next_power_of_two() {
+            Table {
+                t,
+                priv_cmt,
+                proj: None,
+                tag,
+            }
+        } else {
+            Table {
+                t,
+                priv_cmt,
+                proj: Some(proj),
+                tag,
+            }
         }
     }
 }
@@ -68,7 +174,7 @@ pub struct NLookup<F: PrimeField> {
     pcs: PoseidonConfig<F>,
     table: Vec<F>,
     priv_cmts: Vec<F>,
-    tag_to_loc: HashMap<usize, usize>,
+    tag_to_loc: HashMap<usize, Vec<(Range<usize>, isize)>>,
     padding_lookup: (usize, F),
 }
 
@@ -88,40 +194,74 @@ impl<F: PrimeField> NLookup<F> {
             tables.clone().into_iter().unique_by(|t| t.tag).collect();
         assert_eq!(unique_tags.len(), tables.len(), "Duplicate tags on tables");
 
-        // todo proj
-        tables.sort_by(|a, b| {
-            a.t.len()
-                .next_power_of_two()
-                .cmp(&b.t.len().next_power_of_two())
-        });
-        tables = tables.into_iter().rev().collect::<Vec<Table<'a, F>>>();
-
-        let mut remaining_table_size = tables
-            .clone()
-            .into_iter()
-            .map(|t| t.t.len())
-            .sum::<usize>()
-            .next_power_of_two();
-        let mut table = Vec::<F>::new();
+        // accumulate subtables
+        let mut sub_tables = Vec::new();
         let mut priv_cmts = Vec::<F>::new();
-        let mut tag_to_loc = HashMap::<usize, usize>::new();
 
         for t in tables {
             match t.priv_cmt {
                 Some(cmt) => priv_cmts.push(cmt),
                 None => (),
             }
-            tag_to_loc.insert(t.tag, table.len());
 
-            let mut sub_table = t.t.clone();
-            sub_table.extend(vec![
-                F::zero();
-                sub_table.len().next_power_of_two() - sub_table.len()
-            ]);
-
-            remaining_table_size -= sub_table.len();
-            table.extend(sub_table);
+            match t.proj {
+                Some(projs) => {
+                    for p in projs {
+                        let sub_table = t.t[p.0..p.1].to_vec();
+                        assert_eq!(sub_table.len().next_power_of_two(), sub_table.len());
+                        sub_tables.push((sub_table, t.tag, p));
+                    }
+                }
+                None => {
+                    let mut sub_table = t.t.clone();
+                    sub_table.extend(vec![
+                        F::zero();
+                        sub_table.len().next_power_of_two() - sub_table.len()
+                    ]);
+                    let full_range = (0, sub_table.len());
+                    sub_tables.push((sub_table, t.tag, full_range));
+                }
+            }
         }
+
+        sub_tables.sort_by(|a, b| {
+            a.0.len()
+                .next_power_of_two()
+                .cmp(&b.0.len().next_power_of_two())
+        });
+        sub_tables = sub_tables
+            .into_iter()
+            .rev()
+            .collect::<Vec<(Vec<F>, usize, (usize, usize))>>();
+
+        let mut remaining_table_size = sub_tables
+            .clone()
+            .into_iter()
+            .map(|(st, tag, proj)| st.len())
+            .sum::<usize>()
+            .next_power_of_two();
+
+        let mut table = Vec::<F>::new();
+        let mut tag_to_loc = HashMap::<usize, Vec<(Range<usize>, isize)>>::new();
+        // TODO: make sure projections and hybrid make sense?
+
+        for (st, tag, proj) in sub_tables {
+            println!("table len {:#?}, proj 0 {:#?}", table.len(), proj.0);
+            let offset = (table.len() as isize) - (proj.0 as isize);
+            let range = proj.0..proj.1;
+            match tag_to_loc.remove(&tag) {
+                Some(mut offset_vec) => {
+                    offset_vec.push((range, offset));
+                    tag_to_loc.insert(tag, offset_vec);
+                }
+                None => {
+                    tag_to_loc.insert(tag, vec![(range, offset)]); // offset = table placement offset - proj.0
+                }
+            }
+            remaining_table_size -= st.len();
+            table.extend(st);
+        }
+
         table.extend(vec![F::zero(); remaining_table_size]);
 
         let ell = logmn(table.len());
@@ -169,7 +309,8 @@ impl<F: PrimeField> NLookup<F> {
     pub fn nlookup_circuit(
         &mut self,
         cs: ConstraintSystemRef<F>,
-        lookups: &Vec<(usize, F, usize)>, // (q, v, table tag)
+        lookups: &Vec<(usize, F, usize)>, // (q, v, table tag), qs should correspond to original
+        // table
         running_q: Vec<F>,
         running_v: F,
     ) -> Result<NLookupWires<F>, SynthesisError> {
@@ -182,13 +323,24 @@ impl<F: PrimeField> NLookup<F> {
         let mut v = Vec::<FpVar<F>>::new();
         let mut all_q_bits = Vec::<Boolean<F>>::new();
         for (qi, vi, tagi) in lookups.clone().into_iter() {
-            let offset = self.tag_to_loc[&tagi];
-            q_usize.push(qi + offset);
-            // sanity
-            assert_eq!(self.table[qi + offset], vi);
+            let mut offset = 0 as isize;
+            let mut in_range = false;
+            for (range, o) in &self.tag_to_loc[&tagi] {
+                if range.contains(&qi) {
+                    offset = *o;
+                    in_range = true;
+                }
+            }
+            assert!(in_range, "q not in range of table projections");
 
-            let qi_var = FpVar::<F>::new_witness(cs.clone(), || Ok(F::from((qi + offset) as u64)))?; // change
-                                                                                                     // later?
+            let actual_idx = qi as isize + offset;
+            assert!(actual_idx >= 0);
+            q_usize.push(actual_idx as usize);
+            // sanity
+            assert_eq!(self.table[actual_idx as usize], vi);
+
+            let qi_var = FpVar::<F>::new_witness(cs.clone(), || Ok(F::from(actual_idx as u64)))?; // change
+                                                                                                  // later?
             let (qi_bits, _) = qi_var.to_bits_le_with_top_bits_zero(self.ell)?;
             all_q_bits.extend(qi_bits.clone());
             q.push((qi_var, qi_bits));
@@ -678,6 +830,117 @@ mod tests {
         let lookups = vec![(2, 5, 0), (1, 3, 1), (0, 23, 1), (4, 41, 1)];
 
         run_nlookup(2, lookups, vec![pub_table, priv_table]);
+    }
+
+    #[test]
+    fn nl_proj_calc() {
+        let tests = vec![
+            (8, vec![(0, 4)], Some(vec![(0, 4)])),
+            (8, vec![(0, 8)], None),
+            (8, vec![(0, 7)], None),
+            (8, vec![(1, 3)], Some(vec![(0, 4)])),
+            (8, vec![(1, 4), (4, 7)], None),
+            (8, vec![(0, 2), (2, 4)], Some(vec![(0, 4)])),
+            (8, vec![(0, 2), (0, 4)], Some(vec![(0, 4)])),
+            (8, vec![(0, 4), (2, 4)], Some(vec![(0, 4)])),
+            (8, vec![(0, 2), (4, 6)], Some(vec![(0, 2), (4, 6)])),
+            (8, vec![(4, 6), (0, 2)], Some(vec![(0, 2), (4, 6)])),
+            (6, vec![(0, 4)], Some(vec![(0, 4)])),
+            (6, vec![(0, 7)], None),
+        ];
+
+        for (len, ranges, expected) in tests {
+            let t = vec![F::from(3); len];
+            let table = Table::new_proj(&t, None, ranges, 0);
+
+            match expected {
+                Some(proj) => assert_eq!(table.proj.unwrap(), proj),
+                None => assert!(table.proj.is_none()),
+            }
+        }
+    }
+
+    #[test]
+    fn nl_proj() {
+        let t_pre = vec![23, 29, 31, 37, 41, 43, 47, 53];
+        let t: Vec<F> = t_pre.into_iter().map(|x| F::from(x as u64)).collect();
+
+        let tests = vec![
+            (vec![(0, 8)], vec![(2, 31, 1), (0, 23, 1), (4, 41, 1)]),
+            (vec![(0, 4)], vec![(2, 31, 1), (0, 23, 1), (1, 29, 1)]),
+            (vec![(4, 8)], vec![(4, 41, 1), (7, 53, 1), (6, 47, 1)]),
+            (
+                vec![(0, 2), (4, 6)],
+                vec![(4, 41, 1), (0, 23, 1), (5, 43, 1)],
+            ),
+            (
+                vec![(0, 2), (2, 4)],
+                vec![(0, 23, 1), (3, 37, 1), (1, 29, 1)],
+            ),
+        ];
+
+        for (ranges, lookups) in tests {
+            let table = Table::new_proj(&t, None, ranges, 1);
+
+            run_nlookup(2, lookups, vec![table]);
+        }
+    }
+
+    #[test]
+    #[should_panic]
+    fn nl_proj_bad() {
+        let t_pre = vec![23, 29, 31, 37, 41, 43, 47, 53];
+        let t: Vec<F> = t_pre.into_iter().map(|x| F::from(x as u64)).collect();
+
+        let ranges = vec![(1, 4), (6, 8)];
+        let table = Table::new_proj(&t, None, ranges, 1);
+
+        let lookups = vec![(1, 23, 1), (5, 43, 1)];
+        run_nlookup(2, lookups, vec![table]);
+    }
+
+    #[test]
+    fn nl_hybrid_and_proj() {
+        let t_pre = vec![2, 3, 5, 7, 9, 13, 17, 19];
+        let pub_t: Vec<F> = t_pre.into_iter().map(|x| F::from(x as u64)).collect();
+
+        let t_pre = vec![23, 29, 31, 37, 41, 43, 47, 53];
+        let priv_t: Vec<F> = t_pre.into_iter().map(|x| F::from(x as u64)).collect();
+
+        let tests = vec![
+            (
+                vec![(0, 8)],
+                vec![(0, 8)],
+                vec![(2, 5, 0), (0, 23, 1), (4, 41, 1)],
+            ),
+            (
+                vec![(0, 4)],
+                vec![(0, 2), (6, 8)],
+                vec![(3, 7, 0), (0, 23, 1), (6, 47, 1)],
+            ),
+            (
+                vec![(4, 8)],
+                vec![(2, 3), (7, 8)],
+                vec![(4, 9, 0), (7, 19, 0), (2, 31, 1), (7, 53, 1)],
+            ),
+            (
+                vec![(0, 8)],
+                vec![(0, 2), (4, 6)],
+                vec![(4, 41, 1), (0, 23, 1), (5, 13, 0)],
+            ),
+            (
+                vec![(0, 2), (2, 4)],
+                vec![(1, 7)],
+                vec![(0, 2, 0), (3, 7, 0), (5, 43, 1)],
+            ),
+        ];
+
+        for (pub_ranges, priv_ranges, lookups) in tests {
+            let pub_table = Table::new_proj(&pub_t, None, pub_ranges, 0);
+            let priv_table = Table::new_proj(&priv_t, None, priv_ranges, 1);
+
+            run_nlookup(2, lookups, vec![pub_table, priv_table]);
+        }
     }
 
     #[test]
