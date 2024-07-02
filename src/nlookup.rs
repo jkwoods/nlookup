@@ -306,10 +306,26 @@ impl<F: PrimeField> NLookup<F> {
 
     // circuit for a round of lookups
     // qs, vs taken in just as witnesses, fpvar wires returned
-    pub fn nlookup_circuit(
+    pub fn nlookup_circuit_F(
         &mut self,
         cs: ConstraintSystemRef<F>,
         lookups: &Vec<(usize, F, usize)>, // (q, v, table tag), qs should correspond to original
+        // table
+        running_q: Vec<F>,
+        running_v: F,
+    ) -> Result<NLookupWires<F>, SynthesisError> {
+        let mut new_lookups = Vec::<(usize, FpVar<F>, usize)>::new();
+        for (qi, vi, tagi) in lookups.clone().into_iter() {
+            new_lookups.push((qi, FpVar::<F>::new_witness(cs.clone(), || Ok(vi))?, tagi));
+        }
+
+        self.nlookup_circuit(cs, &new_lookups, running_q, running_v)
+    }
+
+    pub fn nlookup_circuit(
+        &mut self,
+        cs: ConstraintSystemRef<F>,
+        lookups: &Vec<(usize, FpVar<F>, usize)>, // (q, v, table tag), qs should correspond to original
         // table
         running_q: Vec<F>,
         running_v: F,
@@ -337,7 +353,7 @@ impl<F: PrimeField> NLookup<F> {
             assert!(actual_idx >= 0);
             q_usize.push(actual_idx as usize);
             // sanity
-            assert_eq!(self.table[actual_idx as usize], vi);
+            assert_eq!(self.table[actual_idx as usize], vi.value()?);
 
             let qi_var = FpVar::<F>::new_witness(cs.clone(), || Ok(F::from(actual_idx as u64)))?; // change
                                                                                                   // later?
@@ -345,7 +361,8 @@ impl<F: PrimeField> NLookup<F> {
             all_q_bits.extend(qi_bits.clone());
             q.push((qi_var, qi_bits));
 
-            v.push(FpVar::<F>::new_witness(cs.clone(), || Ok(vi))?);
+            v.push(vi);
+            //    FpVar::<F>::new_witness(cs.clone(), || Ok(vi))?);
         }
 
         while q.len() < self.m {
@@ -682,7 +699,7 @@ mod tests {
 
             println!("lookups {:#?}", lookups[(i * batch_size)..lu_end].to_vec());
 
-            let res = nl.nlookup_circuit(
+            let res = nl.nlookup_circuit_F(
                 cs.clone(),
                 &lookups[(i * batch_size)..lu_end].to_vec(),
                 running_q,
