@@ -21,16 +21,17 @@ use itertools::Itertools;
 use std::collections::HashMap;
 use std::ops::Range;
 
+#[derive(Clone, Debug)]
 pub struct NLookupWires<F: PrimeField> {
-    q: Vec<(FpVar<F>, Vec<Boolean<F>>)>, // (field elt, bits)
-    v: Vec<FpVar<F>>,
-    prev_running_q: Vec<FpVar<F>>,
-    prev_running_v: FpVar<F>,
-    next_running_q: Vec<FpVar<F>>,
-    next_running_v: FpVar<F>,
+    pub q: Vec<(FpVar<F>, Vec<Boolean<F>>)>, // (field elt, bits)
+    pub v: Vec<FpVar<F>>,
+    pub prev_running_q: Vec<FpVar<F>>,
+    pub prev_running_v: FpVar<F>,
+    pub next_running_q: Vec<FpVar<F>>,
+    pub next_running_v: FpVar<F>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Table<'a, F: PrimeField> {
     t: &'a Vec<F>,
     priv_cmt: Option<F>, // T pub or priv?
@@ -168,6 +169,7 @@ impl<'a, F: PrimeField> Table<'a, F> {
     }
 }
 
+#[derive(Debug)]
 pub struct NLookup<F: PrimeField> {
     ell: usize, // for "big" table
     m: usize,
