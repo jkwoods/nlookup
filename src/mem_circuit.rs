@@ -1,6 +1,6 @@
 use ark_ff::PrimeField;
 use ark_r1cs_std::{
-    alloc::{AllocVar, AllocationMode},
+    alloc::AllocVar,
     boolean::Boolean,
     eq::EqGadget,
     fields::{fp::FpVar, FieldVar},
@@ -11,14 +11,14 @@ use ark_relations::{
     r1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisError, Variable},
 };
 use ark_std::test_rng;
-use std::ops::Not;
+use std::collections::HashMap;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct MemElem<F: PrimeField> {
-    time: F,
-    addr: F,
-    rw: bool, // push/write=1, pop/read=0
-    vals: Vec<F>,
+    pub time: F,
+    pub addr: F,
+    pub rw: bool, // push/write=1, pop/read=0
+    pub vals: Vec<F>,
 }
 
 impl<F: PrimeField> MemElem<F> {
@@ -52,10 +52,10 @@ impl<F: PrimeField> MemElem<F> {
 
 #[derive(Clone, Debug)]
 pub struct MemElemWires<F: PrimeField> {
-    time: FpVar<F>,
-    addr: FpVar<F>,
-    rw: Boolean<F>, // push/write=1, pop/read=0
-    vals: Vec<FpVar<F>>,
+    pub time: FpVar<F>,
+    pub addr: FpVar<F>,
+    pub rw: Boolean<F>, // push/write=1, pop/read=0
+    pub vals: Vec<FpVar<F>>,
 }
 
 impl<F: PrimeField> MemElemWires<F> {
@@ -78,27 +78,117 @@ impl<F: PrimeField> MemElemWires<F> {
     }
 }
 
+// builds the witness for RunningMem
+pub struct MemBuilder<F: PrimeField> {
+    t: Vec<MemElem<F>>,
+    stack: Vec<Vec<F>>,
+    mem: HashMap<usize, Vec<F>>,
+    elem_len: usize,
+    is_stack: bool,
+    time: usize,
+}
+
+impl<F: PrimeField> MemBuilder<F> {
+    pub fn new(elem_len: usize, is_stack: bool) -> Self {
+        assert!(elem_len > 0);
+
+        Self {
+            t: Vec::<MemElem<F>>::new(),
+            stack: Vec::<Vec<F>>::new(),
+            mem: HashMap::new(),
+            elem_len,
+            is_stack,
+            time: 0,
+        }
+    }
+
+    pub fn pop(&mut self) -> Vec<F> {
+        assert!(self.is_stack, "Memory is not stack");
+
+        let popped = self.stack.pop();
+        let elem = match popped {
+            None => panic!("No elements to pop"),
+            Some(p) => p,
+        };
+
+        self.t.push(MemElem::new_f(
+            self.time,
+            self.stack.len(),
+            false,
+            elem.clone(),
+        ));
+        self.time += 1;
+
+        elem
+    }
+
+    pub fn push(&mut self, elem: Vec<F>) {
+        assert!(self.is_stack, "Memory is not stack");
+        assert_eq!(elem.len(), self.elem_len, "Element not correct length");
+
+        self.stack.push(elem.clone());
+
+        self.t
+            .push(MemElem::new_f(self.time, self.stack.len() - 1, true, elem));
+        self.time += 1;
+    }
+
+    pub fn read(&mut self, addr: usize) -> Vec<F> {
+        assert!(!self.is_stack, "Memory is not RAM");
+
+        let elem = if self.mem.contains_key(&addr) {
+            self.mem[&addr].clone()
+        } else {
+            panic!("Uninitialized memory addr")
+        };
+
+        self.t
+            .push(MemElem::new_f(self.time, addr, false, elem.clone()));
+        self.time += 1;
+
+        elem
+    }
+
+    pub fn write(&mut self, addr: usize, elem: Vec<F>) {
+        assert!(!self.is_stack, "Memory is not RAM");
+        assert_eq!(elem.len(), self.elem_len, "Element not correct length");
+
+        self.mem.insert(addr, elem.clone());
+
+        self.t.push(MemElem::new_f(self.time, addr, true, elem));
+        self.time += 1;
+    }
+
+    pub fn get_time_list(&self) -> Vec<MemElem<F>> {
+        assert_eq!(self.t.len(), self.time);
+        self.t.clone()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct RunningMem<F: PrimeField> {
     t: Vec<MemElem<F>>, // entries are (time step, mem addr, push/pop, val)
-    running_t: F,       // running_t at round i
     a: Vec<MemElem<F>>,
-    running_a: F, // running_a at round i
-    ti: usize,    // current round
-    ai: usize,
+    i: usize,   // current round
+    done: bool, // present to allow for "empty" circuits
     perm_chal: Vec<F>,
     is_stack: bool, // ram=0, stack=1
-    time_only: bool,
-    ri_per_circ: usize,
-    ai_per_circ: usize,
     padding: MemElem<F>,
+    // not for circuit use, not updated regularly, be careful
+    running_t_F: F,
+    running_a_F: F,
 }
 
-// when a different proof "read in" your mem (performed only writes)
 #[derive(Clone, Debug)]
-pub struct PrevMem<F: PrimeField> {
-    perm_chal: Vec<F>,
-    witness_t: Vec<MemElem<F>>,
+pub struct RunningMemWires<F: PrimeField> {
+    // for multiple calls in one CS
+    cs: ConstraintSystemRef<F>,
+    running_t: FpVar<F>,
+    running_a: FpVar<F>,
+    ti_m1_time: FpVar<F>,
+    ai_m1_addr: FpVar<F>,
+    ai_m1_rw: Boolean<F>,
+    ai_m1_vals: Vec<FpVar<F>>,
 }
 
 impl<F: PrimeField> RunningMem<F> {
@@ -106,102 +196,107 @@ impl<F: PrimeField> RunningMem<F> {
     pub fn new(
         mut t: Vec<MemElem<F>>,
         is_stack: bool,
-        time_only: bool,
-        batch_size: usize,
         padding: MemElem<F>, // what do you want to use for padding?
-        prev_mem: Option<PrevMem<F>>,
     ) -> Self {
         assert!(t.len() > 0);
-        if time_only {
-            assert!(prev_mem.is_none());
-        }
+
         let vec_len = t[0].vals.len();
         assert!(vec_len > 0);
         assert_eq!(padding.vals.len(), vec_len);
 
         t.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap());
 
-        if prev_mem.is_some() {
-            let mut prev_m = prev_mem.unwrap();
-            assert!(prev_m.witness_t.len() > 0);
-            prev_m
-                .witness_t
-                .sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap());
+        let mut a = t.clone();
+        a.sort_by(|a, b| a.addr.partial_cmp(&b.addr).unwrap());
 
-            assert_eq!(prev_m.witness_t.last().unwrap().time + F::one(), t[0].time);
-            let mut new_t = Vec::<MemElem<F>>::new();
-            new_t.extend(prev_m.witness_t.clone());
-            new_t.extend(t.clone());
+        println!("A list {:#?}", a.clone());
 
-            let mut a = new_t.clone();
-            a.sort_by(|a, b| a.addr.partial_cmp(&b.addr).unwrap());
+        let mut rng = test_rng();
+        let mut perm_chal = Vec::<F>::new();
+        for r in 0..(3 + vec_len) {
+            perm_chal.push(F::rand(&mut rng));
+        }
 
-            let mut running_t = F::one();
-            for i in 0..prev_m.witness_t.len() {
-                running_t = running_t
-                    * (prev_m.perm_chal[0] - prev_m.witness_t[i].time)
-                    * (prev_m.perm_chal[1] - prev_m.witness_t[i].addr)
-                    * (prev_m.perm_chal[2] - F::from(prev_m.witness_t[i].rw));
-                for j in 0..vec_len {
-                    running_t = running_t * (prev_m.perm_chal[3 + j] - prev_m.witness_t[i].vals[j]);
-                }
-            }
-
-            let ai_per_circ = if time_only {
-                0
-            } else {
-                (((a.len() as f32) / (t.len() as f32)).ceil() as usize) * batch_size
-            };
-
-            Self {
-                t: new_t,
-                running_t,
-                a,
-                running_a: F::one(),
-                ti: prev_m.witness_t.len(),
-                ai: 0,
-                perm_chal: prev_m.perm_chal,
-                is_stack,
-                time_only,
-                ri_per_circ: batch_size,
-                ai_per_circ,
-                padding,
-            }
-        } else {
-            let mut a = t.clone();
-            a.sort_by(|a, b| a.addr.partial_cmp(&b.addr).unwrap());
-
-            let mut rng = test_rng();
-            let mut perm_chal = Vec::<F>::new();
-            for r in 0..(3 + vec_len) {
-                perm_chal.push(F::rand(&mut rng));
-            }
-
-            let ai_per_circ = if time_only {
-                0
-            } else {
-                (((a.len() as f32) / (t.len() as f32)).ceil() as usize) * batch_size
-            };
-
-            Self {
-                t,
-                running_t: F::one(),
-                a,
-                running_a: F::one(),
-                ti: 0,
-                ai: 0,
-                perm_chal,
-                is_stack,
-                time_only,
-                ri_per_circ: batch_size,
-                ai_per_circ,
-                padding,
-            }
+        Self {
+            t,
+            a,
+            i: 0,
+            done: false,
+            perm_chal,
+            is_stack,
+            padding,
+            running_t_F: F::zero(),
+            running_a_F: F::zero(),
         }
     }
 
-    pub fn final_checks(&self) {
-        assert_eq!(self.running_t, self.running_a);
+    fn t(&self) -> &MemElem<F> {
+        if self.i < self.t.len() {
+            &self.t[self.i]
+        } else {
+            &self.t[0]
+        }
+    }
+
+    fn a(&self) -> &MemElem<F> {
+        if self.i < self.a.len() {
+            &self.a[self.i]
+        } else {
+            &self.a[0]
+        }
+    }
+
+    pub fn begin_new_circuit(
+        &mut self,
+        cs: ConstraintSystemRef<F>,
+    ) -> Result<RunningMemWires<F>, SynthesisError> {
+        assert!(
+            self.i < self.t.len() || self.done,
+            "Already called funtion {} times",
+            self.i
+        );
+        let vec_len = self.perm_chal.len() - 3;
+
+        let running_t = FpVar::new_witness(cs.clone(), || Ok(self.running_t_F))?;
+        let running_a = FpVar::new_witness(cs.clone(), || Ok(self.running_a_F))?;
+
+        let ti_m1_time = FpVar::new_witness(cs.clone(), || {
+            Ok(if self.i <= 0 || self.done {
+                F::zero()
+            } else {
+                self.t[self.i - 1].time
+            })
+        })?;
+
+        let (ai_m1_vals, ai_m1_rw, ai_m1_addr) = if self.i <= 0 || self.done {
+            (
+                vec![FpVar::new_witness(cs.clone(), || Ok(F::zero()))?; vec_len],
+                Boolean::new_witness(cs.clone(), || Ok(false))?,
+                FpVar::new_witness(cs.clone(), || Ok(F::zero()))?,
+            )
+        } else {
+            let mut ai_m1_vals = Vec::<FpVar<F>>::new();
+            for j in 0..vec_len {
+                ai_m1_vals.push(FpVar::new_witness(cs.clone(), || {
+                    Ok(self.a[self.i - 1].vals[j])
+                })?);
+            }
+            (
+                ai_m1_vals,
+                Boolean::new_witness(cs.clone(), || Ok(self.a[self.i - 1].rw))?,
+                FpVar::new_witness(cs.clone(), || Ok(self.a[self.i - 1].addr))?,
+            )
+        };
+
+        Ok(RunningMemWires {
+            cs: cs.clone(),
+            running_t,
+            running_a,
+            ti_m1_time,
+            ai_m1_addr,
+            ai_m1_rw,
+            ai_m1_vals,
+        })
     }
 
     // return lists of FpVars for time and addr lists
@@ -210,287 +305,138 @@ impl<F: PrimeField> RunningMem<F> {
     // ex 1. for all stacks:
     // outer circuit maintains a stack pointer == t[i].addr + 1 if t[i].rw is push
     // ex 2. value constraints on t[i].vals
-    pub fn make_circuit(
+    pub fn enforce(
         &mut self,
-        cs: ConstraintSystemRef<F>,
-    ) -> Result<(Vec<MemElemWires<F>>, Vec<MemElemWires<F>>), SynthesisError> {
-        let mut output_t = Vec::<MemElemWires<F>>::new();
-        let mut output_a = Vec::<MemElemWires<F>>::new();
+        w: &mut RunningMemWires<F>,
+    ) -> Result<(MemElemWires<F>, MemElemWires<F>), SynthesisError> {
+        self.conditional_enforce(&Boolean::TRUE, w)
+    }
+
+    pub fn conditional_enforce(
+        &mut self,
+        cond: &Boolean<F>,
+        w: &mut RunningMemWires<F>,
+    ) -> Result<(MemElemWires<F>, MemElemWires<F>), SynthesisError> {
+        if cond.value()? {
+            assert!(
+                self.i < self.t.len(),
+                "Already called funtion {} times",
+                self.i
+            );
+        }
+
+        // i not 0
+        let i = FpVar::new_input(w.cs.clone(), || Ok(F::from(self.i as u64)))?;
+        let i_not_0 = i.is_neq(&FpVar::new_constant(w.cs.clone(), F::zero())?)?;
 
         // running perm
         let mut perm_chal = Vec::<FpVar<F>>::new();
         for i in 0..self.perm_chal.len() {
-            perm_chal.push(FpVar::<F>::new_input(cs.clone(), || Ok(self.perm_chal[i]))?)
+            perm_chal.push(FpVar::new_input(w.cs.clone(), || Ok(self.perm_chal[i]))?)
         }
         let vec_len = perm_chal.len() - 3;
 
         // by time
-        let mut ti_m1_time = FpVar::<F>::new_input(cs.clone(), || {
-            Ok(if self.ti <= 0 {
-                F::zero()
-            } else {
-                self.t[self.ti - 1].time
-            })
-        })?;
-
-        let mut ti_time = FpVar::<F>::new_input(cs.clone(), || Ok(self.t[self.ti].time))?;
-        let mut ti_addr = FpVar::<F>::new_input(cs.clone(), || Ok(self.t[self.ti].addr))?;
-        let mut ti_rw = Boolean::<F>::new_input(cs.clone(), || Ok(self.t[self.ti].rw))?;
+        let ti_time = cond.select(
+            &FpVar::new_witness(w.cs.clone(), || Ok(self.t().time))?,
+            &w.ti_m1_time,
+        )?;
+        let ti_addr = FpVar::new_witness(w.cs.clone(), || Ok(self.t().addr))?;
+        let ti_rw = Boolean::new_witness(w.cs.clone(), || Ok(self.t().rw))?;
         let mut ti_vals = Vec::<FpVar<F>>::new();
         for j in 0..vec_len {
-            ti_vals.push(FpVar::<F>::new_input(cs.clone(), || {
-                Ok(self.t[self.ti].vals[j])
-            })?);
+            ti_vals.push(FpVar::new_witness(w.cs.clone(), || Ok(self.t().vals[j]))?);
         }
 
-        let mut running_t = FpVar::new_witness(cs.clone(), || Ok(self.running_t))?;
+        let mut actual_next_running_t = &w.running_t
+            * (&perm_chal[0] - &ti_time)
+            * (&perm_chal[1] - &ti_addr)
+            * (&perm_chal[2] - &FpVar::from(ti_rw.clone()));
+        for j in 0..vec_len {
+            actual_next_running_t *= &perm_chal[3 + j] - &ti_vals[j];
+        }
 
-        // i not 0
-        let mut alloc_t_i = FpVar::<F>::new_input(cs.clone(), || Ok(F::from(self.ti as u64)))?;
+        let new_running_t = cond.select(&actual_next_running_t, &w.running_t)?;
 
-        for t_rep in 0..self.ri_per_circ {
-            let ti_not_0 = if t_rep == 0 {
-                alloc_t_i.is_neq(&FpVar::<F>::new_constant(cs.clone(), F::zero())?)?
-            } else {
-                Boolean::TRUE
-            };
-            let ti_not_max = alloc_t_i.is_neq(&FpVar::<F>::new_constant(
-                cs.clone(),
-                F::from(self.t.len() as u64),
-            )?)?;
+        ti_time.conditional_enforce_equal(&(&w.ti_m1_time + &FpVar::one()), &(&i_not_0 & cond));
 
-            let new_running_t = if self.ti < self.t.len() {
-                let mut intm = FpVar::<F>::new_input(cs.clone(), || {
-                    Ok(self.running_t
-                        * (self.perm_chal[0] - self.t[self.ti].time)
-                        * (self.perm_chal[1] - self.t[self.ti].addr)
-                        * (self.perm_chal[2] - F::from(self.t[self.ti].rw)))
-                })?;
-                for j in 0..vec_len {
-                    intm *= self.perm_chal[3 + j] - self.t[self.ti].vals[j];
-                }
-                intm
-            } else {
-                FpVar::<F>::new_input(cs.clone(), || Ok(self.running_t))?
-            };
+        // by addr
+        let ai_time = FpVar::new_witness(w.cs.clone(), || Ok(self.a().time))?;
+        let ai_addr = cond.select(
+            &FpVar::new_witness(w.cs.clone(), || Ok(self.a().addr))?,
+            &w.ai_m1_addr,
+        )?;
+        let ai_rw = cond.select(
+            &Boolean::new_witness(w.cs.clone(), || Ok(self.a().rw))?,
+            &w.ai_m1_rw,
+        )?;
+        let mut ai_vals = Vec::<FpVar<F>>::new();
+        for j in 0..vec_len {
+            ai_vals.push(cond.select(
+                &FpVar::new_witness(w.cs.clone(), || Ok(self.a().vals[j]))?,
+                &w.ai_m1_vals[j],
+            )?);
+        }
 
-            let mut nrt = running_t.clone()
-                * (&perm_chal[0] - &ti_time)
-                * (&perm_chal[1] - &ti_addr)
-                * (&perm_chal[2] - &FpVar::from(ti_rw.clone()));
-            for j in 0..vec_len {
-                nrt *= &perm_chal[3 + j] - &ti_vals[j];
-            }
-            new_running_t.conditional_enforce_equal(&nrt, &ti_not_max);
+        let mut actual_next_running_a = &w.running_a
+            * (&perm_chal[0] - &ai_time)
+            * (&perm_chal[1] - &ai_addr)
+            * (&perm_chal[2] - &FpVar::from(ai_rw.clone()));
+        for j in 0..vec_len {
+            actual_next_running_a *= &perm_chal[3 + j] - &ai_vals[j];
+        }
 
-            // TODO: fix clonse??
-            new_running_t.conditional_enforce_equal(&running_t, &ti_not_max.clone().not());
+        let new_running_a = cond.select(&actual_next_running_a, &w.running_a)?;
 
-            let new_t_i = FpVar::<F>::new_input(cs.clone(), || {
-                Ok(F::from(
-                    (if self.ti < self.t.len() {
-                        self.ti + 1
-                    } else {
-                        self.ti
-                    }) as u64,
-                ))
-            })?;
-            new_t_i.conditional_enforce_equal(&(&alloc_t_i + &FpVar::one()), &ti_not_max);
+        // if a[i].rw == pop/read
+        //      a[i-1].val == a[i].val
+        let ai_is_read = ai_rw.is_eq(&Boolean::FALSE)?;
+        for j in 0..vec_len {
+            w.ai_m1_vals[j]
+                .conditional_enforce_equal(&ai_vals[j], &(&i_not_0 & &ai_is_read & cond));
+        }
 
-            ti_time.conditional_enforce_equal(
-                &(&ti_m1_time + &FpVar::one()),
-                &(&ti_not_0 & &ti_not_max),
+        if self.is_stack {
+            let ai_is_write = ai_rw.is_eq(&Boolean::TRUE)?;
+            let ai_m1_is_read = w.ai_m1_rw.is_eq(&Boolean::FALSE)?;
+            let ai_m1_is_write = w.ai_m1_rw.is_eq(&Boolean::TRUE)?;
+
+            // only stack by addr
+            // if a[i].rw == pop
+            //      a[i-1].rw == push
+
+            // println!("VALUE {:#?}", (&i_not_0 & &ai_is_read & cond).value()?);
+            // TODO fix when we hear back
+            // w.ai_m1_rw
+            //     .conditional_enforce_equal(&Boolean::TRUE, &(&i_not_0 & &ai_is_read & cond));
+
+            // if a[i].rw == push
+            //      if a[i-1].rw == push
+            //          a[i-1].sp + 1 == a[i].sp
+            ai_addr.conditional_enforce_equal(
+                &(&w.ai_m1_addr + &FpVar::one()),
+                &(&ai_is_write & &ai_m1_is_write & &i_not_0 & cond),
             );
-
-            // update
-            alloc_t_i = new_t_i;
-            ti_m1_time = ti_time.clone();
-            output_t.push(MemElemWires::new(
-                ti_time.clone(),
-                ti_addr.clone(),
-                ti_rw.clone(),
-                ti_vals.clone(),
-            ));
-
-            if self.ti < self.t.len() {
-                self.ti += 1;
-                if self.ti < self.t.len() {
-                    ti_time = FpVar::<F>::new_input(cs.clone(), || Ok(self.t[self.ti].time))?;
-                    ti_addr = FpVar::<F>::new_input(cs.clone(), || Ok(self.t[self.ti].addr))?;
-                    ti_rw = Boolean::<F>::new_input(cs.clone(), || Ok(self.t[self.ti].rw))?;
-                    for j in 0..vec_len {
-                        ti_vals[j] =
-                            FpVar::<F>::new_input(cs.clone(), || Ok(self.t[self.ti].vals[j]))?;
-                    }
-                } else {
-                    // padding
-                    ti_time = FpVar::<F>::new_input(cs.clone(), || Ok(self.padding.time))?;
-                    ti_addr = FpVar::<F>::new_input(cs.clone(), || Ok(self.padding.addr))?;
-                    ti_rw = Boolean::<F>::new_input(cs.clone(), || Ok(self.padding.rw))?;
-                    for j in 0..vec_len {
-                        ti_vals[j] =
-                            FpVar::<F>::new_input(cs.clone(), || Ok(self.padding.vals[j]))?;
-                    }
-                }
-            }
-            self.running_t = new_running_t.value()?;
-            running_t = new_running_t;
         }
 
-        if !self.time_only {
-            // by addr
-            let (mut ai_m1_vals, mut ai_m1_rw, mut ai_m1_addr) = if self.ai <= 0 {
-                (
-                    vec![FpVar::<F>::new_input(cs.clone(), || Ok(F::zero()))?; vec_len],
-                    Boolean::<F>::new_input(cs.clone(), || Ok(false))?,
-                    FpVar::<F>::new_input(cs.clone(), || Ok(F::zero()))?,
-                )
-            } else {
-                let mut ai_m1_vals = Vec::<FpVar<F>>::new();
-                for j in 0..vec_len {
-                    ai_m1_vals.push(FpVar::<F>::new_input(cs.clone(), || {
-                        Ok(self.a[self.ai - 1].vals[j])
-                    })?);
-                }
-                (
-                    ai_m1_vals,
-                    Boolean::<F>::new_input(cs.clone(), || Ok(self.a[self.ai - 1].rw))?,
-                    FpVar::<F>::new_input(cs.clone(), || Ok(self.a[self.ai - 1].addr))?,
-                )
-            };
-
-            let mut ai_time = FpVar::<F>::new_input(cs.clone(), || Ok(self.a[self.ai].time))?;
-            let mut ai_addr = FpVar::<F>::new_input(cs.clone(), || Ok(self.a[self.ai].addr))?;
-            let mut ai_rw = Boolean::<F>::new_input(cs.clone(), || Ok(self.a[self.ai].rw))?;
-            let mut ai_vals = Vec::<FpVar<F>>::new();
-            for j in 0..vec_len {
-                ai_vals.push(FpVar::<F>::new_input(cs.clone(), || {
-                    Ok(self.a[self.ai].vals[j])
-                })?);
+        // update
+        if cond.value()? {
+            self.i += 1;
+            if self.i == self.t.len() {
+                self.done = true;
             }
-
-            let mut running_a = FpVar::<F>::new_input(cs.clone(), || Ok(self.running_a))?;
-
-            // i not 0
-            let mut alloc_a_i = FpVar::<F>::new_input(cs.clone(), || Ok(F::from(self.ai as u64)))?;
-
-            for a_rep in 0..self.ai_per_circ {
-                let ai_not_0 = if a_rep == 0 {
-                    alloc_a_i.is_neq(&FpVar::<F>::new_constant(cs.clone(), F::zero())?)?
-                } else {
-                    Boolean::TRUE
-                };
-                let ai_not_max = alloc_a_i.is_neq(&FpVar::<F>::new_constant(
-                    cs.clone(),
-                    F::from(self.a.len() as u64),
-                )?)?;
-                let ai_okay = &(&ai_not_0 & &ai_not_max);
-
-                let new_running_a = if self.ai < self.a.len() {
-                    let mut intm = FpVar::<F>::new_input(cs.clone(), || {
-                        Ok(self.running_a
-                            * (self.perm_chal[0] - self.a[self.ai].time)
-                            * (self.perm_chal[1] - self.a[self.ai].addr)
-                            * (self.perm_chal[2] - F::from(self.a[self.ai].rw)))
-                    })?;
-                    for j in 0..vec_len {
-                        intm *= self.perm_chal[3 + j] - self.a[self.ai].vals[j];
-                    }
-                    intm
-                } else {
-                    FpVar::<F>::new_input(cs.clone(), || Ok(self.running_a))?
-                };
-
-                let mut nra = running_a.clone()
-                    * (&perm_chal[0] - &ai_time)
-                    * (&perm_chal[1] - &ai_addr)
-                    * (&perm_chal[2] - &FpVar::from(ai_rw.clone()));
-                for j in 0..vec_len {
-                    nra *= &perm_chal[3 + j] - &ai_vals[j];
-                }
-                new_running_a.conditional_enforce_equal(&nra, &ai_not_max);
-                new_running_a.conditional_enforce_equal(&running_a, &ai_not_max.clone().not());
-
-                let new_a_i = FpVar::<F>::new_input(cs.clone(), || {
-                    Ok(F::from(
-                        (if self.ai < self.a.len() {
-                            self.ai + 1
-                        } else {
-                            self.ai
-                        }) as u64,
-                    ))
-                })?;
-                new_a_i.conditional_enforce_equal(&(&alloc_a_i + &FpVar::one()), &ai_not_max);
-
-                // if a[i].rw == pop/read
-                //      a[i-1].val == a[i].val
-                let ai_is_read = ai_rw.is_eq(&Boolean::FALSE)?;
-                for j in 0..vec_len {
-                    ai_m1_vals[j].conditional_enforce_equal(&ai_vals[j], &(ai_okay & &ai_is_read));
-                }
-
-                if self.is_stack {
-                    let ai_is_write = ai_rw.is_eq(&Boolean::TRUE)?;
-                    let ai_m1_is_read = ai_m1_rw.is_eq(&Boolean::FALSE)?;
-                    let ai_m1_is_write = ai_m1_rw.is_eq(&Boolean::TRUE)?;
-
-                    // only stack by addr
-                    // if a[i].rw == pop
-                    //      a[i-1].rw == push
-                    ai_m1_rw.conditional_enforce_equal(&Boolean::TRUE, &(ai_okay & &ai_is_read));
-
-                    // if a[i].rw == push
-                    //      if a[i-1].rw == push
-                    //          a[i-1].sp + 1 == a[i].sp
-                    ai_addr.conditional_enforce_equal(
-                        &(&ai_m1_addr + &FpVar::one()),
-                        &(&ai_is_write & &ai_m1_is_write & ai_okay),
-                    );
-
-                    //      else if a[i-1].rw == pop
-                    //          a[i-1].sp == a[i].sp
-                    ai_addr.conditional_enforce_equal(
-                        &(ai_m1_addr),
-                        &(&ai_is_write & &ai_m1_is_read & ai_okay), // seperate rust var
-                    );
-                }
-
-                // update
-                alloc_a_i = new_a_i.clone();
-                ai_m1_vals = ai_vals.clone();
-                ai_m1_rw = ai_rw.clone();
-                ai_m1_addr = ai_addr.clone();
-                output_a.push(MemElemWires::new(
-                    ai_time.clone(),
-                    ai_addr.clone(),
-                    ai_rw.clone(),
-                    ai_vals.clone(),
-                ));
-                if self.ai < self.a.len() {
-                    self.ai += 1;
-                    if self.ai < self.a.len() {
-                        ai_time = FpVar::<F>::new_input(cs.clone(), || Ok(self.a[self.ai].time))?;
-                        ai_addr = FpVar::<F>::new_input(cs.clone(), || Ok(self.a[self.ai].addr))?;
-                        ai_rw = Boolean::<F>::new_input(cs.clone(), || Ok(self.a[self.ai].rw))?;
-                        for j in 0..vec_len {
-                            ai_vals[j] =
-                                FpVar::<F>::new_input(cs.clone(), || Ok(self.a[self.ai].vals[j]))?;
-                        }
-                    } else {
-                        // padding
-                        ai_time = FpVar::<F>::new_input(cs.clone(), || Ok(self.padding.time))?;
-                        ai_addr = FpVar::<F>::new_input(cs.clone(), || Ok(self.padding.addr))?;
-                        ai_rw = Boolean::<F>::new_input(cs.clone(), || Ok(self.padding.rw))?;
-                        for j in 0..vec_len {
-                            ai_vals[j] =
-                                FpVar::<F>::new_input(cs.clone(), || Ok(self.padding.vals[j]))?;
-                        }
-                    }
-                }
-                self.running_a = new_running_a.value()?;
-                running_a = new_running_a;
-            }
+            self.running_t_F = new_running_t.value()?;
+            self.running_a_F = new_running_a.value()?;
         }
+        w.running_t = new_running_t;
+        w.ti_m1_time = ti_time.clone();
+        let output_t = MemElemWires::new(ti_time, ti_addr, ti_rw, ti_vals);
+
+        w.running_a = new_running_a;
+        w.ai_m1_vals = ai_vals.clone();
+        w.ai_m1_rw = ai_rw.clone();
+        w.ai_m1_addr = ai_addr.clone();
+        let output_a = MemElemWires::new(ai_time, ai_addr, ai_rw, ai_vals);
 
         Ok((output_t, output_a))
     }
@@ -501,136 +447,59 @@ mod tests {
     use crate::mem_circuit::*;
     use ark_pallas::Fr as F;
     use ark_relations::r1cs::{ConstraintSystem, OptimizationGoal};
+    use rand::Rng;
 
-    fn run_mem<F: PrimeField>(
-        time_list: Vec<MemElem<F>>,
-        is_stack: bool,
-        batch_size: Vec<usize>,
-        prev_writes: Option<Vec<MemElem<F>>>,
-    ) {
+    fn run_mem<F: PrimeField>(time_list: Vec<MemElem<F>>, is_stack: bool, batch_size: Vec<usize>) {
         let mem_pad = MemElem::<F>::new(0, 0, false, vec![0; time_list[0].vals.len()]);
+        let mut num_cs = 0;
 
         for b in batch_size {
-            // need to do write only?
-            let pm = if prev_writes.is_some() {
-                let write_list = prev_writes.clone().unwrap();
-                let mut rsm =
-                    RunningMem::new(write_list.clone(), is_stack, true, b, mem_pad.clone(), None);
-                let rounds = ((write_list.len() as f32) / (b as f32)).ceil() as usize;
-
-                let mut padded_write_list = write_list.clone();
-                padded_write_list.extend(vec![mem_pad.clone(); (rounds * b) - write_list.len()]);
-
-                for i in 0..rounds {
-                    let cs = ConstraintSystem::<F>::new_ref();
-                    cs.set_optimization_goal(OptimizationGoal::Constraints);
-                    let res = rsm.make_circuit(cs.clone());
-                    assert!(res.is_ok());
-                    cs.finalize();
-                    assert!(
-                        cs.is_satisfied().unwrap(),
-                        "Failed at batch {}, iter {}",
-                        b,
-                        i
-                    );
-
-                    let (output_t, output_a) = res.unwrap();
-                    assert_eq!(output_a.len(), 0);
-
-                    println!("round {:#?} b {:#?}", i, b);
-                    let t_chunk = &padded_write_list[(i * b)..((i + 1) * b)];
-                    assert_eq!(output_t.len(), t_chunk.len());
-                    assert_eq!(output_t.len(), rsm.ri_per_circ);
-                    assert_eq!(output_a.len(), rsm.ai_per_circ);
-
-                    for o in 0..output_t.len() {
-                        output_t[o].assert_eq(&t_chunk[o]);
-                    }
-                }
-                Some(PrevMem {
-                    perm_chal: rsm.perm_chal,
-                    witness_t: write_list,
-                })
-            } else {
-                None
-            };
-
+            println!("Batch size {}", b);
             // regular
-            let mut rsm =
-                RunningMem::new(time_list.clone(), is_stack, false, b, mem_pad.clone(), pm);
+            let mut rsm = RunningMem::new(time_list.clone(), is_stack, mem_pad.clone());
             let rounds = ((time_list.len() as f32) / (b as f32)).ceil() as usize;
 
-            let mut padded_time_list = time_list.clone();
-            padded_time_list.extend(vec![mem_pad.clone(); (rounds * b) - time_list.len()]);
-
+            let rand = rand::thread_rng().gen_range(0..(b + 1));
             for i in 0..rounds {
+                println!("round {}", i);
+
                 let cs = ConstraintSystem::<F>::new_ref();
                 cs.set_optimization_goal(OptimizationGoal::Constraints);
-                let res = rsm.make_circuit(cs.clone());
-                assert!(res.is_ok());
+
+                let mut rw = rsm.begin_new_circuit(cs.clone()).unwrap();
+
+                for bb in 0..b {
+                    if rand == bb {
+                        //let res = rsm.conditional_enforce(&Boolean::FALSE, &mut rw);
+                        //assert!(res.is_ok());
+                        //println!("BLANK");
+                    }
+
+                    println!("iter {}", bb);
+
+                    if (i * b + bb) < time_list.len() {
+                        let res = rsm.enforce(&mut rw);
+                        assert!(res.is_ok());
+                        let (output_t, output_a) = res.unwrap();
+                        output_t.assert_eq(&time_list[i * b + bb]);
+                    } else {
+                        let res = rsm.conditional_enforce(&Boolean::FALSE, &mut rw);
+                        assert!(res.is_ok());
+                    };
+                }
                 cs.finalize();
-                assert!(
-                    cs.is_satisfied().unwrap(),
-                    "Failed at batch {}, iter {}",
-                    b,
-                    i
-                );
-                println!("Batch {}, iter {}, good", b, i);
+                assert!(cs.is_satisfied().unwrap(), "Failed at iter {}", i);
 
-                let (output_t, output_a) = res.unwrap();
-                let t_chunk = &padded_time_list[(i * b)..((i + 1) * b)];
-                assert_eq!(output_t.len(), t_chunk.len());
-                assert_eq!(output_t.len(), rsm.ri_per_circ);
-                assert_eq!(output_a.len(), rsm.ai_per_circ);
-
-                for o in 0..output_t.len() {
-                    output_t[o].assert_eq(&t_chunk[o]);
+                if i == 0 {
+                    num_cs = cs.num_constraints();
+                    println!("num cs {:#?}", num_cs);
+                } else {
+                    assert_eq!(num_cs, cs.num_constraints());
                 }
             }
-            rsm.final_checks();
-            println!("Batch {} good", b);
+            // final checks
+            assert_eq!(rsm.running_t_F, rsm.running_a_F);
         }
-    }
-
-    #[test]
-    fn write_ahead_of_time() {
-        let write_list = vec![
-            MemElem::<F>::new_single(0, 0, true, 0),
-            MemElem::<F>::new_single(1, 1, true, 1),
-            MemElem::<F>::new_single(2, 2, true, 2),
-            MemElem::<F>::new_single(3, 3, true, 3),
-        ];
-
-        let time_list = vec![
-            MemElem::<F>::new_single(4, 1, false, 1),
-            MemElem::<F>::new_single(5, 1, false, 1),
-            MemElem::<F>::new_single(6, 3, false, 3),
-            MemElem::<F>::new_single(7, 2, true, 4),
-            MemElem::<F>::new_single(8, 2, false, 4),
-        ];
-
-        run_mem(time_list, false, vec![1, 2, 4, 8, 9, 10], Some(write_list));
-    }
-
-    #[test]
-    #[should_panic]
-    fn write_ahead_of_time_bad() {
-        let write_list = vec![
-            MemElem::<F>::new_single(0, 0, true, 0),
-            MemElem::<F>::new_single(1, 1, true, 1),
-            MemElem::<F>::new_single(2, 2, true, 2),
-            MemElem::<F>::new_single(3, 3, true, 3),
-        ];
-
-        let time_list = vec![
-            MemElem::<F>::new_single(4, 1, false, 1),
-            MemElem::<F>::new_single(5, 1, false, 1),
-            MemElem::<F>::new_single(6, 3, false, 2),
-            MemElem::<F>::new_single(7, 2, true, 4),
-            MemElem::<F>::new_single(8, 2, false, 4),
-        ];
-
-        run_mem(time_list, false, vec![1, 2, 4, 8, 9, 10], Some(write_list));
     }
 
     #[test]
@@ -643,7 +512,17 @@ mod tests {
             MemElem::<F>::new_single(4, 0, true, 3),
         ];
 
-        run_mem(time_list, true, vec![1, 2, 5], None);
+        run_mem(time_list.clone(), true, vec![1, 2, 5]);
+
+        let mut mb = MemBuilder::new(1, true);
+        mb.push(vec![F::from(1)]);
+        mb.push(vec![F::from(2)]);
+        assert_eq!(vec![F::from(2)], mb.pop());
+        assert_eq!(vec![F::from(1)], mb.pop());
+        mb.push(vec![F::from(3)]);
+
+        let t = mb.get_time_list();
+        assert_eq!(time_list, t);
     }
 
     #[test]
@@ -657,7 +536,7 @@ mod tests {
             MemElem::<F>::new_single(4, 0, true, 3),
         ];
 
-        run_mem(time_list, true, vec![1, 2, 5], None);
+        run_mem(time_list, true, vec![1, 2, 5]);
     }
 
     #[test]
@@ -674,7 +553,52 @@ mod tests {
             MemElem::<F>::new_single(8, 2, false, 4),
         ];
 
-        run_mem(time_list, false, vec![1, 2, 4, 8, 9, 10], None);
+        run_mem(time_list.clone(), false, vec![1, 2, 4, 8, 9, 10]);
+
+        let mut mb = MemBuilder::new(1, false);
+        mb.write(0, vec![F::from(0)]);
+        mb.write(1, vec![F::from(1)]);
+        mb.write(2, vec![F::from(2)]);
+        mb.write(3, vec![F::from(3)]);
+        assert_eq!(vec![F::from(1)], mb.read(1));
+        assert_eq!(vec![F::from(1)], mb.read(1));
+        assert_eq!(vec![F::from(3)], mb.read(3));
+        mb.write(2, vec![F::from(4)]);
+        assert_eq!(vec![F::from(4)], mb.read(2));
+
+        let t = mb.get_time_list();
+        assert_eq!(time_list, t);
+    }
+
+    #[test]
+    fn mem_mult() {
+        let time_list = vec![
+            MemElem::<F>::new(0, 0, true, vec![0, 10]),
+            MemElem::<F>::new(1, 1, true, vec![1, 11]),
+            MemElem::<F>::new(2, 2, true, vec![2, 12]),
+            MemElem::<F>::new(3, 3, true, vec![3, 13]),
+            MemElem::<F>::new(4, 1, false, vec![1, 11]),
+            MemElem::<F>::new(5, 1, false, vec![1, 11]),
+            MemElem::<F>::new(6, 3, false, vec![3, 13]),
+            MemElem::<F>::new(7, 2, true, vec![4, 14]),
+            MemElem::<F>::new(8, 2, false, vec![4, 14]),
+        ];
+
+        run_mem(time_list.clone(), false, vec![1, 2, 4, 8, 9, 10]);
+
+        let mut mb = MemBuilder::new(2, false);
+        mb.write(0, vec![F::from(0), F::from(10)]);
+        mb.write(1, vec![F::from(1), F::from(11)]);
+        mb.write(2, vec![F::from(2), F::from(12)]);
+        mb.write(3, vec![F::from(3), F::from(13)]);
+        assert_eq!(vec![F::from(1), F::from(11)], mb.read(1));
+        assert_eq!(vec![F::from(1), F::from(11)], mb.read(1));
+        assert_eq!(vec![F::from(3), F::from(13)], mb.read(3));
+        mb.write(2, vec![F::from(4), F::from(14)]);
+        assert_eq!(vec![F::from(4), F::from(14)], mb.read(2));
+
+        let t = mb.get_time_list();
+        assert_eq!(time_list, t);
     }
 
     #[test]
@@ -692,7 +616,7 @@ mod tests {
             MemElem::<F>::new_single(8, 2, false, 4),
         ];
 
-        run_mem(time_list, true, vec![1, 2, 4, 8, 10], None);
+        run_mem(time_list, true, vec![1, 2, 4, 8, 10]);
     }
 
     #[test]
@@ -710,6 +634,22 @@ mod tests {
             MemElem::<F>::new_single(8, 2, false, 4),
         ];
 
-        run_mem(time_list, false, vec![1, 2, 4, 8, 10], None);
+        run_mem(time_list, false, vec![1, 2, 4, 8, 10]);
+    }
+
+    #[test]
+    fn eli_bug() {
+        let mut mb = MemBuilder::new(2, true);
+        mb.push(vec![F::from(0), F::from(0)]);
+        mb.push(vec![F::from(1), F::from(1)]);
+        mb.push(vec![F::from(2), F::from(1)]);
+        mb.pop();
+        mb.pop();
+        mb.pop();
+        mb.push(vec![F::from(0), F::from(1)]);
+
+        let time_list = mb.get_time_list();
+        println!("time list {:#?}", time_list.clone());
+        run_mem(time_list, true, vec![1]);
     }
 }
