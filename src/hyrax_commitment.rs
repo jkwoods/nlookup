@@ -35,9 +35,19 @@ use serde::{Deserialize, Serialize};
 
 // hyrax commitment to an MLE
 #[derive(Deserialize, Serialize)]
-pub struct NLCommitment {
+pub struct NLCommitment<G1> {
     // commitment
-
+    pub single_gens: CommitmentGens<G1>,
+    hyrax_gen: HyraxPC<G1>,
+    doc_poly: MultilinearPolynomial<<G1 as Group>::Scalar>,
+    pub doc_commit: PolyCommit<G1>,
+    doc_decommit: PolyCommitBlinds<G1>,
+    pub doc_commit_hash: <G1 as Group>::Scalar,
+    pub hash_salt: <G1 as Group>::Scalar,
+    // consistency verification
+    cap_pk: SpartanProverKey<G1, EE1>,
+    cap_vk: SpartanVerifierKey<G1, EE1>,
+    q_len: usize,
 
     // prover only info
 
@@ -128,7 +138,7 @@ impl NLCommitment {
 
     }
 
-
+}
 
 
 
@@ -138,7 +148,7 @@ impl NLCommitment {
 
 
 #[derive(Deserialize, Serialize)]
-pub struct ConsistencyProof {
+pub struct ConsistencyProof<G1> {
     // consistency verification
     pub hash_d: <G1 as Group>::Scalar,
     circuit: ConsistencyCircuit<<G1 as Group>::Scalar>,

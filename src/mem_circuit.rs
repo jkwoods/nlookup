@@ -79,6 +79,7 @@ impl<F: PrimeField> MemElemWires<F> {
 }
 
 // builds the witness for RunningMem
+#[derive(Debug)]
 pub struct MemBuilder<F: PrimeField> {
     t: Vec<MemElem<F>>,
     stack: Vec<Vec<F>>,
