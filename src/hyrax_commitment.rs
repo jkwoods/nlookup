@@ -1,5 +1,4 @@
 use ::bellperson::{gadgets::num::AllocatedNum, ConstraintSystem, SynthesisError};
-use ff::{Field, PrimeField};
 use generic_array::typenum;
 use merlin::Transcript;
 use neptune::{
@@ -30,12 +29,15 @@ use nova_snark::{
     StepCounterType,
 };
 use rand::rngs::OsRng;
-use rug::{integer::Order, Integer};
 use serde::{Deserialize, Serialize};
+
+type G1 = pasta_curves::pallas::Point;
+type G2 = pasta_curves::vesta::Point;
+type EE1 = nova_snark::provider::ipa_pc::EvaluationEngine<G1>;
 
 // hyrax commitment to an MLE
 #[derive(Deserialize, Serialize)]
-pub struct NLCommitment<G1> {
+pub struct NLCommitment {
     // commitment
     pub single_gens: CommitmentGens<G1>,
     hyrax_gen: HyraxPC<G1>,
@@ -48,17 +50,14 @@ pub struct NLCommitment<G1> {
     cap_pk: SpartanProverKey<G1, EE1>,
     cap_vk: SpartanVerifierKey<G1, EE1>,
     q_len: usize,
-
     // prover only info
-
 }
 
 impl NLCommitment {
-    pub fn new(table: Vec<F>) -> Self
+    pub fn new(table: Vec<<G1 as Group>::Scalar>) -> Self
     where
         G1: Group<Base = <G2 as Group>::Scalar>,
         G2: Group<Base = <G1 as Group>::Scalar>,
-        F: <G1 as Group>::Scalar,
     {
         let cap_circuit: ConsistencyCircuit<<G1 as Group>::Scalar> = ConsistencyCircuit::new(
             <G1 as Group>::Scalar::zero(),
@@ -134,21 +133,12 @@ impl NLCommitment {
             cap_vk,
             q_len,
         };
-
-
     }
-
 }
 
-
-
-
-
-
-
-
+/*
 #[derive(Deserialize, Serialize)]
-pub struct ConsistencyProof<G1> {
+pub struct ConsistencyProof<G1, EE1> {
     // consistency verification
     pub hash_d: <G1 as Group>::Scalar,
     circuit: ConsistencyCircuit<<G1 as Group>::Scalar>,
@@ -164,13 +154,13 @@ pub struct ConsistencyProof<G1> {
 }
 
 #[derive(Clone, Deserialize, Serialize)]
-pub struct ConsistencyCircuit<F: PrimeField> {
+pub struct ConsistencyCircuit<F: BellPrimeField> {
     d: F,
     v: F,
     s: F,
 }
 
-impl<F: PrimeField> ConsistencyCircuit<F> {
+impl<F: BellPrimeField> ConsistencyCircuit<F> {
     pub fn new(d: F, v: F, s: F) -> Self {
         ConsistencyCircuit { d, v, s }
     }
@@ -178,7 +168,7 @@ impl<F: PrimeField> ConsistencyCircuit<F> {
 
 impl<F> StepCircuit<F> for ConsistencyCircuit<F>
 where
-    F: PrimeField,
+    F: BellPrimeField,
 {
     fn arity(&self) -> usize {
         1
@@ -249,11 +239,4 @@ where
         StepCounterType::Incremental
     }
 }
-
-
-
-
-
-
-
-
+*/
