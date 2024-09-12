@@ -4,7 +4,7 @@ use bellpepper_core::{
     num::AllocatedNum,
     ConstraintSystem, SynthesisError,
 };
-//use ff::Field;
+use ff::Field;
 use nova_snark::{
     provider::{PallasEngine, VestaEngine},
     traits::{circuit::StepCircuit, Engine, Group},
@@ -20,6 +20,14 @@ type S2 = nova_snark::spartan::snark::RelaxedR1CSSNARK<E2, EE2>; // non-preproce
 #[derive(Clone, Debug)]
 struct FCircuit<G: Group> {
     temp: G::Scalar,
+}
+
+impl<G: Group> FCircuit<G> {
+    pub fn new() -> Self {
+        FCircuit {
+            temp: G::Scalar::ZERO,
+        }
+    }
 }
 
 impl<G: Group> StepCircuit<G::Scalar> for FCircuit<G> {
@@ -42,7 +50,7 @@ mod tests {
     fn generate_arkworks_example() {}
 
     fn run_nova() {
-        let circuit_primary = TrivialCircuit::default();
+        let circuit_primary = FCircuit::new();
         let circuit_secondary = CubicCircuit::default();
 
         // produce public parameters
