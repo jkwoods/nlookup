@@ -1,13 +1,15 @@
+use ark_ff::Field as arkField;
+use ark_relations::r1cs::{ConstraintMatrices, ConstraintSystemRef};
 use bellpepper::gadgets::Assignment;
 use bellpepper_core::{
     boolean::{AllocatedBit, Boolean},
     num::AllocatedNum,
     ConstraintSystem, SynthesisError,
 };
-use ff::Field;
+use ff::Field as novaField;
 use nova_snark::{
     provider::{PallasEngine, VestaEngine},
-    traits::{circuit::StepCircuit, Engine, Group},
+    traits::{circuit::StepCircuit, Engine, Group as novaGroup},
 };
 
 type E1 = PallasEngine;
@@ -18,19 +20,67 @@ type S1 = nova_snark::spartan::snark::RelaxedR1CSSNARK<E1, EE1>; // non-preproce
 type S2 = nova_snark::spartan::snark::RelaxedR1CSSNARK<E2, EE2>; // non-preprocessing SNARK
 
 #[derive(Clone, Debug)]
-struct FCircuit<G: Group> {
-    temp: G::Scalar,
+struct FCircuit<G: novaGroup> {
+    //ark_matrices: Vec<ConstraintMatrices<F>>,
+    lcs: Vec<(
+        Vec<(G::Scalar, usize)>,
+        Vec<(G::Scalar, usize)>,
+        Vec<(G::Scalar, usize)>,
+    )>,
+    wit_assignments: Vec<G::Scalar>,
 }
 
-impl<G: Group> FCircuit<G> {
-    pub fn new() -> Self {
-        FCircuit {
-            temp: G::Scalar::ZERO,
+impl<G: novaGroup> FCircuit<G> {
+    // make circuits and witnesses for round i
+    pub fn new<F: arkField>(ark_cs_ref: ConstraintSystemRef<F>) -> (Self, Vec<G::Scalar>) {
+        ark_cs_ref.finalize();
+        let ark_cs = ark_cs_ref.borrow().unwrap();
+
+        let io_assignments = ark_cs
+            .instance_assignment
+            .iter()
+            .map(|f| Self::ark_to_nova_field(f))
+            .collect(); // this is ouput and used as zi
+        let wit_assignments = ark_cs
+            .witness_assignment
+            .iter()
+            .map(|f| Self::ark_to_nova_field(f))
+            .collect();
+
+        let ark_matrices = ark_cs.to_matrices().unwrap();
+        let mut lcs = Vec::new();
+        for i in 0..ark_matrices.a.len() {
+            lcs.push((
+                ark_matrices.a[i]
+                    .iter()
+                    .map(|(val, index)| (Self::ark_to_nova_field(val), *index))
+                    .collect(),
+                ark_matrices.b[i]
+                    .iter()
+                    .map(|(val, index)| (Self::ark_to_nova_field(val), *index))
+                    .collect(),
+                ark_matrices.c[i]
+                    .iter()
+                    .map(|(val, index)| (Self::ark_to_nova_field(val), *index))
+                    .collect(),
+            ));
         }
+
+        (
+            FCircuit {
+                lcs,
+                wit_assignments,
+            },
+            io_assignments,
+        )
+    }
+
+    fn ark_to_nova_field<F: arkField>(ark_ff: &F) -> G::Scalar {
+        return G::Scalar::ZERO;
     }
 }
 
-impl<G: Group> StepCircuit<G::Scalar> for FCircuit<G> {
+impl<G: novaGroup> StepCircuit<G::Scalar> for FCircuit<G> {
     fn arity(&self) -> usize {
         2
     }
@@ -40,6 +90,20 @@ impl<G: Group> StepCircuit<G::Scalar> for FCircuit<G> {
         cs: &mut CS,
         z: &[AllocatedNum<G::Scalar>],
     ) -> Result<Vec<AllocatedNum<G::Scalar>>, SynthesisError> {
+        // io already allocated in z
+
+        // allocate all wits
+
+        // add constraints
+        /*for (i, (a, b, c)) in self.r1cs.constraints.iter().enumerate() {
+            cs.enforce(
+                || format!("con{}", i),
+                |z| lc_to_bellman::<F, CS>(&vars, a, z),
+                |z| lc_to_bellman::<F, CS>(&vars, b, z),
+                |z| lc_to_bellman::<F, CS>(&vars, c, z),
+            );
+        }*/
+
         Ok(z.to_vec())
     }
 }
