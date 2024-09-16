@@ -4,20 +4,13 @@ use bellpepper::gadgets::Assignment;
 use bellpepper_core::{
     boolean::{AllocatedBit, Boolean},
     num::AllocatedNum,
-    ConstraintSystem, SynthesisError,
+    ConstraintSystem, LinearCombination, SynthesisError,
 };
 use ff::{Field as novaField, PrimeField as novaPrimeField};
 use nova_snark::{
     provider::{PallasEngine, VestaEngine},
     traits::{circuit::StepCircuit, Engine, Group as novaGroup},
 };
-
-type E1 = PallasEngine;
-type E2 = VestaEngine;
-type EE1 = nova_snark::provider::hyperkzg::EvaluationEngine<E1>;
-type EE2 = nova_snark::provider::ipa_pc::EvaluationEngine<E2>;
-type S1 = nova_snark::spartan::snark::RelaxedR1CSSNARK<E1, EE1>; // non-preprocessing SNARK
-type S2 = nova_snark::spartan::snark::RelaxedR1CSSNARK<E2, EE2>; // non-preprocessing SNARK
 
 fn ark_to_nova_field<A: arkPrimeField, N: novaPrimeField<Repr = [u8; 32]>>(ark_ff: &A) -> N {
     // ark F -> ark BigInt
@@ -30,12 +23,40 @@ fn ark_to_nova_field<A: arkPrimeField, N: novaPrimeField<Repr = [u8; 32]>>(ark_f
     N::from_repr(TryInto::<[u8; 32]>::try_into(bytes).unwrap()).unwrap()
 }
 
+fn bellpepper_lc<N: novaPrimeField, CS: ConstraintSystem<N>>(
+    alloc_inputs: &[AllocatedNum<N>],
+    alloc_wits: &Vec<AllocatedNum<N>>,
+    lc: &Vec<(N, usize)>,
+    i: usize,
+) -> LinearCombination<N> {
+    let mut lc_bellpepper = LinearCombination::zero();
+
+    let num_inputs = alloc_inputs.len();
+
+    for (val, idx) in lc {
+        if *idx == 0 {
+            // constant
+            lc_bellpepper = lc_bellpepper + (*val, CS::one());
+        } else if *idx <= num_inputs {
+            // input
+            lc_bellpepper = lc_bellpepper + (*val, alloc_inputs[*idx - 1].get_variable());
+        } else {
+            // witness
+            lc_bellpepper =
+                lc_bellpepper + (*val, alloc_wits[*idx - 1 - num_inputs].get_variable());
+        }
+    }
+
+    lc_bellpepper
+}
+
 #[derive(Clone, Debug)]
 struct FCircuit<N: novaPrimeField<Repr = [u8; 32]>> {
     //ark_matrices: Vec<ConstraintMatrices<F>>,
     lcs: Vec<(Vec<(N, usize)>, Vec<(N, usize)>, Vec<(N, usize)>)>,
     wit_assignments: Vec<N>,
-    io_len: usize,
+    output_assignments: Vec<N>, // TODO split this for recursive!
+    z_len: usize,
 }
 
 impl<N: novaPrimeField<Repr = [u8; 32]>> FCircuit<N> {
@@ -44,9 +65,12 @@ impl<N: novaPrimeField<Repr = [u8; 32]>> FCircuit<N> {
         ark_cs_ref.finalize();
         let ark_cs = ark_cs_ref.borrow().unwrap();
 
+        assert_eq!(ark_cs.instance_assignment[0], A::one());
+
         let io_assignments: Vec<N> = ark_cs
             .instance_assignment
             .iter()
+            .skip(1) // this is always a constant one
             .map(|f| ark_to_nova_field(f))
             .collect(); // this is ouput and used as zi
         let wit_assignments = ark_cs
@@ -78,7 +102,8 @@ impl<N: novaPrimeField<Repr = [u8; 32]>> FCircuit<N> {
             FCircuit {
                 lcs,
                 wit_assignments,
-                io_len: io_assignments.len(),
+                output_assignments: Vec::new(), // TODO!
+                z_len: io_assignments.len(),
             },
             io_assignments,
         )
@@ -87,7 +112,7 @@ impl<N: novaPrimeField<Repr = [u8; 32]>> FCircuit<N> {
 
 impl<N: novaPrimeField<Repr = [u8; 32]>> StepCircuit<N> for FCircuit<N> {
     fn arity(&self) -> usize {
-        2
+        self.z_len
     }
 
     fn synthesize<CS: ConstraintSystem<N>>(
@@ -96,18 +121,24 @@ impl<N: novaPrimeField<Repr = [u8; 32]>> StepCircuit<N> for FCircuit<N> {
         z: &[AllocatedNum<N>],
     ) -> Result<Vec<AllocatedNum<N>>, SynthesisError> {
         // io already allocated in z
+        assert_eq!(z.len(), self.z_len);
 
         // allocate all wits
+        let mut alloc_wits = Vec::new();
+        for (i, w) in self.wit_assignments.iter().enumerate() {
+            alloc_wits.push(AllocatedNum::alloc(
+                cs.namespace(|| format!("wit {}", i)),
+                || Ok(*w),
+            )?)
+        }
 
         // add constraints
-        /*for (i, (a, b, c)) in self.r1cs.constraints.iter().enumerate() {
-            cs.enforce(
-                || format!("con{}", i),
-                |z| lc_to_bellman::<F, CS>(&vars, a, z),
-                |z| lc_to_bellman::<F, CS>(&vars, b, z),
-                |z| lc_to_bellman::<F, CS>(&vars, c, z),
-            );
-        }*/
+        for (i, (a, b, c)) in self.lcs.iter().enumerate() {
+            let a_lc = bellpepper_lc::<N, CS>(z, &alloc_wits, a, i);
+            let b_lc = bellpepper_lc::<N, CS>(z, &alloc_wits, b, i);
+            let c_lc = bellpepper_lc::<N, CS>(z, &alloc_wits, c, i);
+            cs.enforce(|| format!("con{}", i), |_| a_lc, |_| b_lc, |_| c_lc);
+        }
 
         Ok(z.to_vec())
     }
@@ -117,11 +148,29 @@ impl<N: novaPrimeField<Repr = [u8; 32]>> StepCircuit<N> for FCircuit<N> {
 mod tests {
 
     use crate::bellpepper::*;
-    use ark_ff::BigInt;
+    use ark_ff::{BigInt, One};
+    use ark_relations::{
+        lc,
+        r1cs::{ConstraintSystem, Variable},
+    };
     use ff::PrimeField as novaPrimeField;
-    use nova_snark::traits::Group;
+    use nova_snark::{
+        traits::{
+            circuit::TrivialCircuit, evaluation::EvaluationEngineTrait, snark::default_ck_hint,
+            Group,
+        },
+        CompressedSNARK, PublicParams, RecursiveSNARK,
+    };
+
     type NG = pasta_curves::pallas::Point;
     type AF = ark_pallas::Fr;
+
+    type E1 = PallasEngine;
+    type E2 = VestaEngine;
+    type EE1 = nova_snark::provider::ipa_pc::EvaluationEngine<E1>;
+    type EE2 = nova_snark::provider::ipa_pc::EvaluationEngine<E2>;
+    type S1 = nova_snark::spartan::snark::RelaxedR1CSSNARK<E1, EE1>;
+    type S2 = nova_snark::spartan::snark::RelaxedR1CSSNARK<E2, EE2>;
 
     #[test]
     fn ff_convert() {
@@ -142,18 +191,44 @@ mod tests {
         );
     }
 
-    fn generate_arkworks_example() {}
-    /*
-    fn run_nova() {
-        let circuit_primary = FCircuit::new();
-        let circuit_secondary = CubicCircuit::default();
+    #[test]
+    fn arkworks_example() {
+        let cs = ConstraintSystem::<AF>::new_ref();
+        let two = AF::one() + AF::one();
+        let a = cs.new_input_variable(|| Ok(AF::one())).unwrap();
+        let b = cs.new_witness_variable(|| Ok(AF::one())).unwrap();
+        let c = cs.new_witness_variable(|| Ok(two)).unwrap();
+        cs.enforce_constraint(lc!() + a, lc!() + (two, b), lc!() + c)
+            .unwrap();
+        let d = cs.new_lc(lc!() + a + b).unwrap();
+        cs.enforce_constraint(lc!() + a, lc!() + d, lc!() + d)
+            .unwrap();
+        let e = cs.new_lc(lc!() + d + d).unwrap();
+        cs.enforce_constraint(lc!() + Variable::One, lc!() + e, lc!() + e)
+            .unwrap();
+        // TODO bug??
+        //cs.inline_all_lcs();
+        //cs.finalize();
+        //assert!(cs.is_satisfied().unwrap());
+        //println!("SAT");
+
+        let (bp_circuit, z0) = FCircuit::new(cs);
+
+        run_nova(bp_circuit, z0);
+    }
+
+    fn run_nova(
+        circuit_primary: FCircuit<<NG as Group>::Scalar>,
+        z0_primary: Vec<<NG as Group>::Scalar>,
+    ) {
+        let circuit_secondary = TrivialCircuit::default();
 
         // produce public parameters
         let pp = PublicParams::<
             E1,
             E2,
-            TrivialCircuit<<E1 as Engine>::Scalar>,
-            CubicCircuit<<E2 as Engine>::Scalar>,
+            FCircuit<<E1 as Engine>::Scalar>,
+            TrivialCircuit<<E2 as Engine>::Scalar>,
         >::setup(
             &circuit_primary,
             &circuit_secondary,
@@ -162,19 +237,19 @@ mod tests {
         )
         .unwrap();
 
-        let num_steps = 3;
+        let num_steps = 1;
 
         // produce a recursive SNARK
         let mut recursive_snark = RecursiveSNARK::<
             E1,
             E2,
-            TrivialCircuit<<E1 as Engine>::Scalar>,
-            CubicCircuit<<E2 as Engine>::Scalar>,
+            FCircuit<<E1 as Engine>::Scalar>,
+            TrivialCircuit<<E2 as Engine>::Scalar>,
         >::new(
             &pp,
             &circuit_primary,
             &circuit_secondary,
-            &[<E1 as Engine>::Scalar::ONE],
+            &z0_primary,
             &[<E2 as Engine>::Scalar::ZERO],
         )
         .unwrap();
@@ -185,44 +260,23 @@ mod tests {
         }
 
         // verify the recursive SNARK
-        let res = recursive_snark.verify(
-            &pp,
-            num_steps,
-            &[<E1 as Engine>::Scalar::ONE],
-            &[<E2 as Engine>::Scalar::ZERO],
-        );
+        let res =
+            recursive_snark.verify(&pp, num_steps, &z0_primary, &[<E2 as Engine>::Scalar::ZERO]);
         assert!(res.is_ok());
 
         let (zn_primary, zn_secondary) = res.unwrap();
 
-        // sanity: check the claimed output with a direct computation of the same
-        assert_eq!(zn_primary, vec![<E1 as Engine>::Scalar::ONE]);
-        let mut zn_secondary_direct = vec![<E2 as Engine>::Scalar::ZERO];
-        for _i in 0..num_steps {
-            zn_secondary_direct = circuit_secondary.clone().output(&zn_secondary_direct);
-        }
-        assert_eq!(zn_secondary, zn_secondary_direct);
-        assert_eq!(zn_secondary, vec![<E2 as Engine>::Scalar::from(2460515u64)]);
-
         // produce the prover and verifier keys for compressed snark
-        let (pk, vk) = CompressedSNARK::<_, _, _, _, S<E1, EE1>, S<E2, EE2>>::setup(&pp).unwrap();
+        let (pk, vk) = CompressedSNARK::<_, _, _, _, S1, S2>::setup(&pp).unwrap();
 
         // produce a compressed SNARK
-        let res = CompressedSNARK::<_, _, _, _, S<E1, EE1>, S<E2, EE2>>::prove(
-            &pp,
-            &pk,
-            &recursive_snark,
-        );
+        let res = CompressedSNARK::<_, _, _, _, S1, S2>::prove(&pp, &pk, &recursive_snark);
         assert!(res.is_ok());
         let compressed_snark = res.unwrap();
 
         // verify the compressed SNARK
-        let res = compressed_snark.verify(
-            &vk,
-            num_steps,
-            &[<E1 as Engine>::Scalar::ONE],
-            &[<E2 as Engine>::Scalar::ZERO],
-        );
+        let res =
+            compressed_snark.verify(&vk, num_steps, &z0_primary, &[<E2 as Engine>::Scalar::ZERO]);
         assert!(res.is_ok());
-    }*/
+    }
 }
