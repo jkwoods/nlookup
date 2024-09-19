@@ -1,3 +1,4 @@
+use crate::bellpepper::AllocIoVar;
 use crate::utils::*;
 use ark_crypto_primitives::sponge::poseidon::{
     constraints::PoseidonSpongeVar, PoseidonConfig, PoseidonSponge,
@@ -478,6 +479,28 @@ impl<F: PrimeField> NLookup<F> {
 
         // last_claim = eq_eval * next_running_claim
         last_claim.enforce_equal(&(eq_eval * &next_running_v));
+
+        // inputize
+        let mut in_running_q: Vec<FpVar<F>> = Vec::new();
+        let mut out_next_running_q: Vec<FpVar<F>> = Vec::new();
+        for i in 0..running_q_vars.len() {
+            let (iq, oq) = FpVar::new_input_output_pair(
+                cs.clone(),
+                || Ok(running_q_vars[i].value()?),
+                || Ok(next_running_q[i].value()?),
+            )
+            .unwrap();
+            iq.enforce_equal(&running_q_vars[i]);
+            oq.enforce_equal(&next_running_q[i]);
+        }
+        let (in_running_v, out_next_running_v) = FpVar::new_input_output_pair(
+            cs.clone(),
+            || Ok(running_v_var.value()?),
+            || Ok(next_running_v.value()?),
+        )
+        .unwrap();
+        in_running_v.enforce_equal(&running_v_var);
+        out_next_running_v.enforce_equal(&next_running_v);
 
         Ok(NLookupWires {
             q,

@@ -169,14 +169,14 @@ impl<N: novaPrimeField<Repr = [u8; 32]>> StepCircuit<N> for FCircuit<N> {
         }
 
         // combine io
-        let mut io_assignments = Vec::new();
+        let mut alloc_io = Vec::new();
         for i in 0..(self.input_assignments.len() + self.output_assignments.len()) {
             if i % 2 == 0 {
                 // input
-                io_assignments.push(z[i / 2].clone());
+                alloc_io.push(z[i / 2].clone());
             } else {
                 // output
-                io_assignments.push(alloc_out[(i - 1) / 2].clone()); // TODO?
+                alloc_io.push(alloc_out[(i - 1) / 2].clone()); // TODO?
             }
         }
 
@@ -191,9 +191,9 @@ impl<N: novaPrimeField<Repr = [u8; 32]>> StepCircuit<N> for FCircuit<N> {
 
         // add constraints
         for (i, (a, b, c)) in self.lcs.iter().enumerate() {
-            let a_lc = bellpepper_lc::<N, CS>(&io_assignments, &alloc_wits, a, i);
-            let b_lc = bellpepper_lc::<N, CS>(&io_assignments, &alloc_wits, b, i);
-            let c_lc = bellpepper_lc::<N, CS>(&io_assignments, &alloc_wits, c, i);
+            let a_lc = bellpepper_lc::<N, CS>(&alloc_io, &alloc_wits, a, i);
+            let b_lc = bellpepper_lc::<N, CS>(&alloc_io, &alloc_wits, b, i);
+            let c_lc = bellpepper_lc::<N, CS>(&alloc_io, &alloc_wits, c, i);
             cs.enforce(|| format!("con{}", i), |_| a_lc, |_| b_lc, |_| c_lc);
         }
 
