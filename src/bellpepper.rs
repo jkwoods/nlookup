@@ -144,6 +144,10 @@ impl<N: novaPrimeField<Repr = [u8; 32]>> FCircuit<N> {
     pub fn get_zi(&self) -> &Vec<N> {
         return &self.input_assignments;
     }
+
+    pub fn get_z_i_plus_1(&self) -> &Vec<N> {
+        return &self.output_assignments;
+    }
 }
 
 impl<N: novaPrimeField<Repr = [u8; 32]>> StepCircuit<N> for FCircuit<N> {
