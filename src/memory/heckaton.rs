@@ -173,7 +173,7 @@ pub struct RunningMem<F: PrimeField> {
     i: usize,   // current round
     done: bool, // present to allow for "empty" circuits
     perm_chal: Vec<F>,
-    is_stack: bool, // ram=0, stack=1
+    is_stack: bool,
     padding: MemElem<F>,
     // not for circuit use, not updated regularly, be careful
     running_t_F: F,
@@ -247,7 +247,7 @@ impl<F: PrimeField> RunningMem<F> {
         }
     }
 
-    pub fn begin_new_circuit(
+    fn begin_new_circuit(
         &mut self,
         cs: ConstraintSystemRef<F>,
     ) -> Result<RunningMemWires<F>, SynthesisError> {
@@ -306,14 +306,14 @@ impl<F: PrimeField> RunningMem<F> {
     // ex 1. for all stacks:
     // outer circuit maintains a stack pointer == t[i].addr + 1 if t[i].rw is push
     // ex 2. value constraints on t[i].vals
-    pub fn enforce(
+    pub fn next_op(
         &mut self,
         w: &mut RunningMemWires<F>,
     ) -> Result<(MemElemWires<F>, MemElemWires<F>), SynthesisError> {
-        self.conditional_enforce(&Boolean::TRUE, w)
+        self.conditional_next_op(&Boolean::TRUE, w)
     }
 
-    pub fn conditional_enforce(
+    fn conditional_next_op(
         &mut self,
         cond: &Boolean<F>,
         w: &mut RunningMemWires<F>,
@@ -445,7 +445,7 @@ impl<F: PrimeField> RunningMem<F> {
 
 mod tests {
 
-    use crate::mem_circuit::*;
+    use crate::memory::heckaton::*;
     use ark_pallas::Fr as F;
     use ark_relations::r1cs::{ConstraintSystem, OptimizationGoal};
     use rand::Rng;
@@ -479,12 +479,12 @@ mod tests {
                     println!("iter {}", bb);
 
                     if (i * b + bb) < time_list.len() {
-                        let res = rsm.enforce(&mut rw);
+                        let res = rsm.next_op(&mut rw);
                         assert!(res.is_ok());
                         let (output_t, output_a) = res.unwrap();
                         output_t.assert_eq(&time_list[i * b + bb]);
                     } else {
-                        let res = rsm.conditional_enforce(&Boolean::FALSE, &mut rw);
+                        let res = rsm.conditional_next_op(&Boolean::FALSE, &mut rw);
                         assert!(res.is_ok());
                     };
                 }
