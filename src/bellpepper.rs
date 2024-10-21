@@ -3,21 +3,14 @@ use ark_r1cs_std::{
     alloc::{AllocVar, AllocationMode},
     boolean::Boolean,
     fields::{fp::FpVar, FieldVar},
-    R1CSVar,
 };
-use ark_relations::r1cs::{
-    ConstraintMatrices, ConstraintSystemRef, Namespace, SynthesisError as arkSynthesisError,
-};
-use bellpepper::gadgets::Assignment;
+use ark_relations::r1cs::{ConstraintSystemRef, Namespace, SynthesisError as arkSynthesisError};
 use bellpepper_core::{
     num::AllocatedNum, ConstraintSystem, LinearCombination, SynthesisError as bpSynthesisError,
 };
 use core::borrow::Borrow;
 use ff::{Field as novaField, PrimeField as novaPrimeField};
-use nova_snark::{
-    provider::{PallasEngine, VestaEngine},
-    traits::{circuit::StepCircuit, Engine, Group as novaGroup},
-};
+use nova_snark::traits::circuit::StepCircuit;
 
 pub trait AllocIoVar<V: ?Sized, A: arkField>: Sized + AllocVar<V, A> {
     /// Allocates a new input/output pair of type `Self` in the `ConstraintSystem`
@@ -209,17 +202,18 @@ impl<N: novaPrimeField<Repr = [u8; 32]>> StepCircuit<N> for FCircuit<N> {
 mod tests {
 
     use crate::bellpepper::*;
+    use crate::nlookup::*;
     use ark_ff::{BigInt, One};
     use ark_r1cs_std::eq::EqGadget;
     use ark_relations::{
         lc,
-        r1cs::{ConstraintSystem, Variable},
+        r1cs::{ConstraintSystem, OptimizationGoal, Variable},
     };
     use ff::PrimeField as novaPrimeField;
     use nova_snark::{
         traits::{
             circuit::TrivialCircuit, evaluation::EvaluationEngineTrait, snark::default_ck_hint,
-            Group,
+            Engine, Group,
         },
         CompressedSNARK, PublicParams, RecursiveSNARK,
     };
@@ -227,8 +221,8 @@ mod tests {
     type NG = pasta_curves::pallas::Point;
     type AF = ark_pallas::Fr;
 
-    type E1 = PallasEngine;
-    type E2 = VestaEngine;
+    type E1 = nova_snark::provider::PallasEngine;
+    type E2 = nova_snark::provider::VestaEngine;
     type EE1 = nova_snark::provider::ipa_pc::EvaluationEngine<E1>;
     type EE2 = nova_snark::provider::ipa_pc::EvaluationEngine<E2>;
     type S1 = nova_snark::spartan::snark::RelaxedR1CSSNARK<E1, EE1>;
@@ -253,6 +247,149 @@ mod tests {
         );
     }
 
+    /*
+    #[test]
+    fn nlookup_convert() {
+        let zi_list = vec![
+            vec![AF::one(), AF::one()],
+            vec![AF::from(2), AF::from(4)],
+            vec![AF::from(4), AF::from(12)],
+            vec![AF::from(8), AF::from(32)],
+        ];
+        run_nova_nlookup(make_circuit_1, zi_list, 3);
+    }
+
+    fn make_nlookup_circuit<'a>(
+        nl: NLookup<AF>,
+        lookups: Vec<(usize, F, usize)>,
+        i: usize,
+    ) -> FCircuit<<NG as Group>::Scalar> {
+        let batch_size = nl.m;
+
+        let cs = ConstraintSystem::<AF>::new_ref();
+        cs.set_optimization_goal(OptimizationGoal::Constraints);
+
+        let lu_end = if (i + 1) * batch_size < lookups.len() {
+            (i + 1) * batch_size
+        } else {
+            lookups.len()
+        };
+
+        println!("lookups {:#?}", lookups[(i * batch_size)..lu_end].to_vec());
+
+        let res = nl.nlookup_circuit_F(
+            cs.clone(),
+            &lookups[(i * batch_size)..lu_end].to_vec(),
+            running_q,
+            running_v,
+        );
+        assert!(res.is_ok());
+
+        let nl_wires = res.unwrap();
+        running_q = nl_wires
+            .next_running_q
+            .into_iter()
+            .map(|x| x.value().unwrap())
+            .collect();
+        running_v = nl_wires.next_running_v.value().unwrap();
+
+        FCircuit::new(cs)
+    }
+
+        fn run_nova_nlookup(
+            batch_size: usize,
+            qv: Vec<(usize, usize, usize)>,
+            tables: Vec<Table<'a, F>>,
+        ) {
+            let num_steps = ((qv.len() as f32) / (batch_size as f32)).ceil() as usize;
+            println!("ROUNDS {:#?}", rounds);
+
+            let lookups: Vec<(usize, F, usize)> = qv
+                .into_iter()
+                .map(|(q, v, t)| (q, AF::from(v as u64), t))
+                .collect();
+
+            let mut nl = NLookup::new(tables, batch_size, None);
+            //let (mut running_q, mut running_v) = nl.first_running_claim();
+
+            let mut circuit_primary = make_nlookup_circuit(nl, lookups, 0);
+
+            let circuit_secondary = TrivialCircuit::default();
+            /*let z0_primary = circuit_primary.get_zi().clone();
+            assert_eq!(
+                z0_primary,
+                zi_list[0]
+                    .iter()
+                    .map(|f| ark_to_nova_field::<AF, <NG as Group>::Scalar>(f))
+                    .collect::<Vec<<NG as Group>::Scalar>>()
+            );*/
+
+            // produce public parameters
+            let pp = PublicParams::<
+                E1,
+                E2,
+                FCircuit<<E1 as Engine>::Scalar>,
+                TrivialCircuit<<E2 as Engine>::Scalar>,
+            >::setup(
+                &circuit_primary,
+                &circuit_secondary,
+                &*default_ck_hint(),
+                &*default_ck_hint(),
+            )
+            .unwrap();
+
+            // produce a recursive SNARK
+            let mut recursive_snark = RecursiveSNARK::<
+                E1,
+                E2,
+                FCircuit<<E1 as Engine>::Scalar>,
+                TrivialCircuit<<E2 as Engine>::Scalar>,
+            >::new(
+                &pp,
+                &circuit_primary,
+                &circuit_secondary,
+                &z0_primary,
+                &[<E2 as Engine>::Scalar::ZERO],
+            )
+            .unwrap();
+
+            for i in 0..num_steps {
+                let res = recursive_snark.prove_step(&pp, &circuit_primary, &circuit_secondary);
+                assert!(res.is_ok());
+                res.unwrap();
+                circuit_primary = make_nlookup_circuit(nl, lookups, i + 1);
+            }
+
+            // verify the recursive SNARK
+            let res =
+                recursive_snark.verify(&pp, num_steps, &z0_primary, &[<E2 as Engine>::Scalar::ZERO]);
+            assert!(res.is_ok());
+
+            let (zn_primary, zn_secondary) = res.unwrap();
+            /*assert_eq!(
+                zn_primary,
+                zi_list[num_steps]
+                    .iter()
+                    .map(|f| ark_to_nova_field::<AF, <NG as Group>::Scalar>(f))
+                    .collect::<Vec<<NG as Group>::Scalar>>()
+            );*/
+
+            // produce the prover and verifier keys for compressed snark
+            let (pk, vk) = CompressedSNARK::<_, _, _, _, S1, S2>::setup(&pp).unwrap();
+
+            // produce a compressed SNARK
+            let res = CompressedSNARK::<_, _, _, _, S1, S2>::prove(&pp, &pk, &recursive_snark);
+            assert!(res.is_ok());
+            let compressed_snark = res.unwrap();
+
+            // verify the compressed SNARK
+            let res =
+                compressed_snark.verify(&vk, num_steps, &z0_primary, &[<E2 as Engine>::Scalar::ZERO]);
+            assert!(res.is_ok());
+
+            return zn_primary;
+        }
+    */
     #[test]
     fn circuit_convert() {
         let zi_list = vec![
@@ -281,10 +418,10 @@ mod tests {
         let w = FpVar::new_witness(cs.clone(), || Ok(two)).unwrap();
 
         // a_in * 2 = a_out
-        a_out.enforce_equal(&(a_in.clone() * two));
+        a_out.enforce_equal(&(a_in.clone() * two)).unwrap();
 
         // (b_in + a_in) * w = b_out
-        b_out.enforce_equal(&((b_in + a_in) * w));
+        b_out.enforce_equal(&((b_in + a_in) * w)).unwrap();
 
         FCircuit::new(cs)
     }
