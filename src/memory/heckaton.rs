@@ -359,7 +359,7 @@ impl<F: PrimeField> RunningMem<F> {
 
         let new_running_t = cond.select(&actual_next_running_t, &w.running_t)?;
 
-        ti_time.conditional_enforce_equal(&(&w.ti_m1_time + &FpVar::one()), &(&i_not_0 & cond));
+        ti_time.conditional_enforce_equal(&(&w.ti_m1_time + &FpVar::one()), &(&i_not_0 & cond))?;
 
         // by addr
         let ai_time = FpVar::new_witness(w.cs.clone(), || Ok(self.a().time))?;
@@ -394,7 +394,7 @@ impl<F: PrimeField> RunningMem<F> {
         let ai_is_read = ai_rw.is_eq(&Boolean::FALSE)?;
         for j in 0..vec_len {
             w.ai_m1_vals[j]
-                .conditional_enforce_equal(&ai_vals[j], &(&i_not_0 & &ai_is_read & cond));
+                .conditional_enforce_equal(&ai_vals[j], &(&i_not_0 & &ai_is_read & cond))?;
         }
 
         if self.is_stack {
@@ -417,7 +417,7 @@ impl<F: PrimeField> RunningMem<F> {
             ai_addr.conditional_enforce_equal(
                 &(&w.ai_m1_addr + &FpVar::one()),
                 &(&ai_is_write & &ai_m1_is_write & &i_not_0 & cond),
-            );
+            )?;
         }
 
         // update

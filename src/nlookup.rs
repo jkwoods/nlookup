@@ -71,7 +71,6 @@ impl<'a, F: PrimeField> Table<'a, F> {
 
             println!("real start {:#?}, real end {:#?}", real_start, real_end);
 
-            assert!(real_start >= 0);
             assert!(real_end <= t.len().next_power_of_two());
 
             let mut end = t.len().next_power_of_two();
@@ -478,7 +477,7 @@ impl<F: PrimeField> NLookup<F> {
         })?;
 
         // last_claim = eq_eval * next_running_claim
-        last_claim.enforce_equal(&(eq_eval * &next_running_v));
+        last_claim.enforce_equal(&(eq_eval * &next_running_v))?;
 
         // inputize
         let mut in_running_q: Vec<FpVar<F>> = Vec::new();
@@ -490,8 +489,8 @@ impl<F: PrimeField> NLookup<F> {
                 || Ok(next_running_q[i].value()?),
             )
             .unwrap();
-            iq.enforce_equal(&running_q_vars[i]);
-            oq.enforce_equal(&next_running_q[i]);
+            iq.enforce_equal(&running_q_vars[i])?;
+            oq.enforce_equal(&next_running_q[i])?;
         }
         let (in_running_v, out_next_running_v) = FpVar::new_input_output_pair(
             cs.clone(),
@@ -499,8 +498,8 @@ impl<F: PrimeField> NLookup<F> {
             || Ok(next_running_v.value()?),
         )
         .unwrap();
-        in_running_v.enforce_equal(&running_v_var);
-        out_next_running_v.enforce_equal(&next_running_v);
+        in_running_v.enforce_equal(&running_v_var)?;
+        out_next_running_v.enforce_equal(&next_running_v)?;
 
         Ok(NLookupWires {
             q,
