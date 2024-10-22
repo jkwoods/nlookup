@@ -247,7 +247,7 @@ impl<F: PrimeField> RunningMem<F> {
         }
     }
 
-    fn begin_new_circuit(
+    pub fn begin_new_circuit(
         &mut self,
         cs: ConstraintSystemRef<F>,
     ) -> Result<RunningMemWires<F>, SynthesisError> {
@@ -313,7 +313,7 @@ impl<F: PrimeField> RunningMem<F> {
         self.conditional_next_op(&Boolean::TRUE, w)
     }
 
-    fn conditional_next_op(
+    pub fn conditional_next_op(
         &mut self,
         cond: &Boolean<F>,
         w: &mut RunningMemWires<F>,
