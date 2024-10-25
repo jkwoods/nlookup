@@ -26,3 +26,12 @@ nova-snark = { version = "0.37.0", default-features = false }
 [profile.test]
 opt-level = 3
 
+[patch.crates-io]
+ark-r1cs-std = { git = "https://github.com/arkworks-rs/r1cs-std/" }
+ark-ff = { git = "https://github.com/arkworks-rs/algebra/" }
+ark-ec = { git = "https://github.com/arkworks-rs/algebra/" }
+ark-poly = { git = "https://github.com/arkworks-rs/algebra/" }
+ark-serialize = { git = "https://github.com/arkworks-rs/algebra/" }
+ark-std = { git = "https://github.com/arkworks-rs/std/" }
+ark-crypto-primitives = {git = "https://github.com/arkworks-rs/crypto-primitives.git"}
+ark-pallas = { git = "https://github.com/arkworks-rs/algebra/" }
