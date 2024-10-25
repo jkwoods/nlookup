@@ -210,7 +210,7 @@ impl<F: PrimeField> RunningMem<F> {
         let mut a = t.clone();
         a.sort_by(|a, b| a.addr.partial_cmp(&b.addr).unwrap());
 
-        println!("A list {:#?}", a.clone());
+        // println!("A list {:#?}", a.clone());
 
         let mut rng = test_rng();
         let mut perm_chal = Vec::<F>::new();
@@ -455,14 +455,14 @@ mod tests {
         let mut num_cs = 0;
 
         for b in batch_size {
-            println!("Batch size {}", b);
+            // println!("Batch size {}", b);
             // regular
             let mut rsm = RunningMem::new(time_list.clone(), is_stack, mem_pad.clone());
             let rounds = ((time_list.len() as f32) / (b as f32)).ceil() as usize;
 
             let rand = rand::thread_rng().gen_range(0..(b + 1));
             for i in 0..rounds {
-                println!("round {}", i);
+                // println!("round {}", i);
 
                 let cs = ConstraintSystem::<F>::new_ref();
                 cs.set_optimization_goal(OptimizationGoal::Constraints);
@@ -476,7 +476,7 @@ mod tests {
                         //println!("BLANK");
                     }
 
-                    println!("iter {}", bb);
+                    // println!("iter {}", bb);
 
                     if (i * b + bb) < time_list.len() {
                         let res = rsm.next_op(&mut rw);

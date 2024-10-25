@@ -12,7 +12,7 @@ ark-relations = { version = "0.5.0-alpha.0", default-features = false }
 ark-r1cs-std = { version = "0.5.0-alpha.0", default-features = false }
 ark-pallas = { version = "0.5.0-alpha.0" }
 ark-std = { version = "0.5.0-alpha.0", default-features = false }
-ark-crypto-primitives = { version = "0.5.0-alpha.0", features = ["sponge","r1cs"] }
+ark-crypto-primitives = { git="https://github.com/arkworks-rs/crypto-primitives.git", features = ["sponge","r1cs"] }
 itertools = "0.13.0"
 rand = "0.8"
 
