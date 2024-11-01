@@ -31,7 +31,7 @@ pub fn horners<F: PrimeField>(coeffs: &Vec<FpVar<F>>, x: &FpVar<F>) -> FpVar<F> 
 // from Eli
 // https://github.com/ecmargo/coral/blob/af1e35d53effe1060f1488675d55681314e24b1d/src/util.rs#L20
 ///Uses the `PoseidonDefaultConfig` to compute the Poseidon parameters.
-pub(crate) fn construct_poseidon_parameters_internal<F: PrimeField>(
+pub fn construct_poseidon_parameters_internal<F: PrimeField>(
     rate: usize,
     full_rounds: u64,
     partial_rounds: u64,
