@@ -269,7 +269,7 @@ impl<F: PrimeField> NLookup<F> {
         let ell = logmn(table.len());
 
         let pcs: PoseidonConfig<F> =
-            construct_poseidon_parameters_internal(2, 8, 56, 4, 5).unwrap(); //correct?
+            construct_poseidon_parameters_internal(4, 8, 56, 4, 5).unwrap(); //correct?
 
         let padding = if padding_lookup.is_some() {
             let pd = padding_lookup.unwrap();
