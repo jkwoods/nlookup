@@ -184,12 +184,12 @@ pub struct RunningMem<F: PrimeField> {
 pub struct RunningMemWires<F: PrimeField> {
     // for multiple calls in one CS
     cs: ConstraintSystemRef<F>,
-    running_t: FpVar<F>,
-    running_a: FpVar<F>,
-    ti_m1_time: FpVar<F>,
-    ai_m1_addr: FpVar<F>,
-    ai_m1_rw: Boolean<F>,
-    ai_m1_vals: Vec<FpVar<F>>,
+    pub running_t: FpVar<F>,
+    pub running_a: FpVar<F>,
+    pub ti_m1_time: FpVar<F>,
+    pub ai_m1_addr: FpVar<F>,
+    pub ai_m1_rw: Boolean<F>,
+    pub ai_m1_vals: Vec<FpVar<F>>,
 }
 
 impl<F: PrimeField> RunningMem<F> {
