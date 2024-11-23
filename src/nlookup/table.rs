@@ -1,4 +1,7 @@
-use crate::bellpepper::{ark_to_nova_field, nova_to_ark_field};
+use crate::{
+    bellpepper::{ark_to_nova_field, nova_to_ark_field},
+    utils::{logmn, mle_eval},
+};
 use ark_ff::PrimeField as arkPrimeField;
 use ff::{PrimeField as novaPrimeField, PrimeFieldBits};
 use nova_snark::{
@@ -10,10 +13,18 @@ use nova_snark::{
     spartan::polys::multilinear::MultilinearPolynomial,
     traits::{AbsorbInROTrait, Engine, ROTrait},
 };
+use std::collections::HashMap;
+
+// we have to hardcode these, unfortunately
+type E1 = nova_snark::provider::PallasEngine;
+type E2 = nova_snark::provider::VestaEngine;
+type N1 = <E1 as Engine>::Scalar;
+type N2 = <E2 as Engine>::Scalar;
 
 #[derive(Clone, Debug)]
 pub struct Table<A: arkPrimeField> {
     pub t: Vec<A>,
+    nova_t: Option<MultilinearPolynomial<N1>>,
     pub priv_cmt: Option<A>, // T pub or priv?
     pub proj: Option<Vec<(usize, usize)>>,
     pub tag: usize,
@@ -22,15 +33,9 @@ pub struct Table<A: arkPrimeField> {
 // A must be ark_pallas::Fr
 impl<A: arkPrimeField> Table<A> {
     pub fn new(mut t: Vec<A>, private: bool, tag: usize) -> Self {
-        // we have to hardcode these, unfortunately
-        type E1 = nova_snark::provider::PallasEngine;
-        type E2 = nova_snark::provider::VestaEngine;
-        type N1 = <E1 as Engine>::Scalar;
-        type N2 = <E2 as Engine>::Scalar;
-
         t.extend(vec![A::zero(); t.len().next_power_of_two() - t.len()]);
 
-        let priv_cmt = if private {
+        let (nova_t, priv_cmt) = if private {
             // convert to nova Fields
             let nova_table = t.iter().map(|a| ark_to_nova_field::<A, N1>(a)).collect();
 
@@ -53,13 +58,14 @@ impl<A: arkPrimeField> Table<A> {
             let doc_commit_for_hash: N1 = ro.squeeze(256);
 
             let ark_cmt: A = nova_to_ark_field(&doc_commit_for_hash);
-            Some(ark_cmt)
+            (Some(poly), Some(ark_cmt))
         } else {
-            None
+            (None, None)
         };
 
         Table {
             t,
+            nova_t,
             priv_cmt,
             proj: None,
             tag,
@@ -172,4 +178,98 @@ impl<A: arkPrimeField> Table<A> {
         table.proj = projection;
         table
     }
+
+    // for now assume all tables public
+    fn calc_sub_v(sub_tables: Vec<&[A]>, q: &[A]) -> A {
+        //TODO
+
+        if q.len() == 0 {
+            // in this case, passed subtable should be the correct subset already
+            assert_eq!(sub_tables.len(), 1);
+            let ell = logmn(sub_tables[0].len());
+            let real_q = vec![A::zero(); ell];
+            mle_eval(sub_tables[0], &real_q)
+        } else if sub_tables.len() == 1 && logmn(sub_tables[0].len()) == q.len() {
+            mle_eval(sub_tables[0], q)
+        } else if sub_tables.len() == 1 && logmn(sub_tables[0].len()) != q.len() {
+            panic!("table length and q length mismatch");
+        } else {
+            let total_subtables_len: usize = sub_tables
+                .iter()
+                .map(|t| t.len())
+                .sum::<usize>()
+                .next_power_of_two();
+            assert!(total_subtables_len % 2 == 0);
+            let half_len = total_subtables_len / 2;
+
+            let mut sub_vec_left = Vec::new();
+            let mut sub_len = 0;
+            let mut i = 0;
+            while sub_len < half_len {
+                sub_vec_left.push(sub_tables[i]);
+                sub_len += sub_tables[i].len();
+                i += 1;
+            }
+            assert_eq!(sub_len, half_len);
+            let mut sub_vec_right = Vec::new();
+            sub_len = 0;
+            for j in i..sub_tables.len() {
+                sub_vec_right.push(sub_tables[j]);
+                sub_len += sub_tables[j].len();
+            }
+            //assert_eq!(sub_len, half_len);
+
+            (A::one() - q[0]) * Self::calc_sub_v(sub_vec_left, &q[1..])
+                + q[0] * Self::calc_sub_v(sub_vec_right, &q[1..])
+        }
+    }
+
+    // ordering info: (table tag, proj)
+    pub(crate) fn calc_running_claim(
+        ordering_info: Vec<(usize, (usize, usize))>,
+        tables: Vec<&Table<A>>,
+        running_q: Vec<A>,
+    ) -> A {
+        println!("ORDERING INFO {:#?}", ordering_info);
+
+        let mut hash_tag_table = HashMap::<usize, &Table<A>>::new();
+        for t in tables {
+            hash_tag_table.insert(t.tag, t);
+        }
+
+        let mut sliced_tables = Vec::new();
+        for (tag, proj) in ordering_info {
+            let table = hash_tag_table[&tag];
+
+            if table.proj.is_some() {
+                assert!(table.proj.as_ref().unwrap().contains(&proj));
+            } else {
+                assert_eq!(table.t.len(), proj.1 - proj.0);
+            }
+
+            sliced_tables.push(&table.t[proj.0..proj.1]);
+        }
+
+        Self::calc_sub_v(sliced_tables, &running_q)
+    }
+
+    pub fn verify_running_claim(
+        ordering_info: Vec<(usize, (usize, usize))>,
+        tables: Vec<&Table<A>>,
+        q: &Vec<N1>,
+        v: &N1,
+    ) {
+        //assert!(self.priv_cmt.is_none());
+        //assert!(self.nova_t.is_none());
+
+        let ark_q: Vec<A> = q.iter().map(|x| nova_to_ark_field::<N1, A>(x)).collect();
+        let ark_v: A = nova_to_ark_field::<N1, A>(v);
+
+        assert_eq!(
+            ark_v,
+            Self::calc_running_claim(ordering_info, tables, ark_q)
+        );
+    }
+
+    pub fn prove_private_running_claim(&self) {}
 }

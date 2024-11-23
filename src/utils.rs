@@ -13,6 +13,40 @@ pub fn logmn(mn: usize) -> usize {
     }
 }
 
+pub fn mle_eval<F: PrimeField>(table: &[F], x: &[F]) -> F {
+    let chis = evals(x);
+    assert_eq!(chis.len(), table.len());
+
+    (0..chis.len())
+        .into_iter()
+        .map(|i| chis[i] * table[i])
+        .reduce(|x, y| x + y)
+        .unwrap()
+}
+
+fn evals<F: PrimeField>(x: &[F]) -> Vec<F> {
+    let ell = x.len();
+    let mut evals: Vec<F> = vec![F::zero(); (2_usize).pow(ell as u32)];
+    let mut size = 1;
+    evals[0] = F::one();
+
+    for r in x.iter().rev() {
+        let (evals_left, evals_right) = evals.split_at_mut(size);
+        let (evals_right, _) = evals_right.split_at_mut(size);
+
+        evals_left
+            .iter_mut()
+            .zip(evals_right.iter_mut())
+            .for_each(|(x, y)| {
+                *y = *x * r;
+                *x -= &*y;
+            });
+
+        size *= 2;
+    }
+    evals
+}
+
 pub fn horners<F: PrimeField>(coeffs: &Vec<FpVar<F>>, x: &FpVar<F>) -> FpVar<F> {
     let num_c = coeffs.len();
 

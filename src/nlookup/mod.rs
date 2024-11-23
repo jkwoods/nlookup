@@ -42,6 +42,7 @@ pub struct NLookup<F: PrimeField> {
     priv_cmts: Vec<F>,
     tag_to_loc: HashMap<usize, Vec<(Range<usize>, isize)>>,
     padding_lookup: (usize, F),
+    ordering_info: Vec<(usize, (usize, usize))>, // (table tag, proj)
 }
 
 // initialize nlookup table, allowed to call circuit for multiple rounds
@@ -49,7 +50,7 @@ pub struct NLookup<F: PrimeField> {
 // optionally, you can specify what "lookup" is used to pad non-full batches
 impl<F: PrimeField> NLookup<F> {
     pub fn new(
-        mut tables: Vec<Table<F>>,
+        tables: Vec<&Table<F>>,
         num_lookups: usize,
         padding_lookup: Option<(usize, F)>,
     ) -> Self {
@@ -64,7 +65,7 @@ impl<F: PrimeField> NLookup<F> {
         let mut sub_tables = Vec::<(Vec<F>, usize, (usize, usize))>::new();
         let mut priv_cmts = Vec::<F>::new();
 
-        for t in &tables {
+        for t in tables {
             match t.priv_cmt {
                 Some(cmt) => priv_cmts.push(cmt.clone()),
                 None => (),
@@ -97,12 +98,13 @@ impl<F: PrimeField> NLookup<F> {
             .rev()
             .collect::<Vec<(Vec<F>, usize, (usize, usize))>>();
 
-        let mut remaining_table_size = sub_tables
-            .clone()
-            .into_iter()
-            .map(|(st, tag, proj)| st.len())
-            .sum::<usize>()
-            .next_power_of_two();
+        let mut remaining_table_size = 0;
+        let mut ordering_info = Vec::new();
+        for (st, tag, proj) in &sub_tables {
+            remaining_table_size += st.len();
+            ordering_info.push((*tag, *proj));
+        }
+        remaining_table_size = remaining_table_size.next_power_of_two();
 
         let mut table = Vec::<F>::new();
         let mut tag_to_loc = HashMap::<usize, Vec<(Range<usize>, isize)>>::new();
@@ -154,6 +156,7 @@ impl<F: PrimeField> NLookup<F> {
             priv_cmts,
             tag_to_loc,
             padding_lookup: padding,
+            ordering_info,
         }
     }
 
@@ -328,13 +331,7 @@ impl<F: PrimeField> NLookup<F> {
         let eq_eval = horners(&eq_evals, &rho);
 
         let next_running_v = FpVar::<F>::new_witness(cs.clone(), || {
-            Ok(self.mle_eval(
-                next_running_q
-                    .clone()
-                    .into_iter()
-                    .map(|x| x.value().unwrap())
-                    .collect(),
-            ))
+            Ok(self.mle_eval(&next_running_q.iter().map(|x| x.value().unwrap()).collect()))
         })?;
 
         // last_claim = eq_eval * next_running_claim
@@ -476,40 +473,10 @@ impl<F: PrimeField> NLookup<F> {
         }
     }
 
-    fn mle_eval(&self, x: Vec<F>) -> F {
+    fn mle_eval(&self, x: &Vec<F>) -> F {
         assert_eq!(x.len(), self.ell);
 
-        let chis = Self::evals(x);
-        assert_eq!(chis.len(), self.table.len());
-
-        (0..chis.len())
-            .into_iter()
-            .map(|i| chis[i] * self.table[i])
-            .reduce(|x, y| x + y)
-            .unwrap()
-    }
-
-    fn evals(x: Vec<F>) -> Vec<F> {
-        let ell = x.len();
-        let mut evals: Vec<F> = vec![F::zero(); (2_usize).pow(ell as u32)];
-        let mut size = 1;
-        evals[0] = F::one();
-
-        for r in x.iter().rev() {
-            let (evals_left, evals_right) = evals.split_at_mut(size);
-            let (evals_right, _) = evals_right.split_at_mut(size);
-
-            evals_left
-                .iter_mut()
-                .zip(evals_right.iter_mut())
-                .for_each(|(x, y)| {
-                    *y = *x * r;
-                    *x -= &*y;
-                });
-
-            size *= 2;
-        }
-        evals
+        mle_eval(&self.table, x)
     }
 
     fn gen_eq_table(rho: F, qs: &Vec<usize>, last_q: &Vec<F>) -> Vec<F> {
@@ -561,7 +528,7 @@ mod tests {
     type N1 = <E1 as Engine>::Scalar;
     type N2 = <nova_snark::provider::VestaEngine as Engine>::Scalar;
 
-    fn run_nlookup(batch_size: usize, qv: Vec<(usize, usize, usize)>, tables: Vec<Table<F>>) {
+    fn run_nlookup(batch_size: usize, qv: Vec<(usize, usize, usize)>, tables: Vec<&Table<F>>) {
         let rounds = ((qv.len() as f32) / (batch_size as f32)).ceil() as usize;
         println!("ROUNDS {:#?}", rounds);
 
@@ -570,7 +537,7 @@ mod tests {
             .map(|(q, v, t)| (q, F::from(v as u64), t))
             .collect();
 
-        let mut nl = NLookup::new(tables, batch_size, None);
+        let mut nl = NLookup::new(tables.clone(), batch_size, None);
         let (mut running_q, mut running_v) = nl.first_running_claim();
 
         for i in 0..rounds {
@@ -604,6 +571,9 @@ mod tests {
             cs.finalize();
             assert!(cs.is_satisfied().unwrap(), "Failed at iter {}", i);
         }
+
+        let v_calc = Table::calc_running_claim(nl.ordering_info, tables, running_q);
+        assert_eq!(v_calc, running_v);
     }
 
     #[test]
@@ -614,7 +584,7 @@ mod tests {
 
         let lookups = vec![(2, 5, 0), (1, 3, 0), (7, 19, 0)];
 
-        run_nlookup(3, lookups, vec![table]);
+        run_nlookup(3, lookups, vec![&table]);
     }
 
     #[test]
@@ -634,10 +604,10 @@ mod tests {
             (1, 3, 0),
         ];
 
-        run_nlookup(8, lookups.clone(), vec![table.clone()]);
-        run_nlookup(4, lookups.clone(), vec![table.clone()]);
-        run_nlookup(2, lookups.clone(), vec![table.clone()]);
-        run_nlookup(1, lookups.clone(), vec![table.clone()]);
+        run_nlookup(8, lookups.clone(), vec![&table]);
+        run_nlookup(4, lookups.clone(), vec![&table]);
+        run_nlookup(2, lookups.clone(), vec![&table]);
+        run_nlookup(1, lookups.clone(), vec![&table]);
     }
 
     #[test]
@@ -648,7 +618,7 @@ mod tests {
         let table = Table::new(t, false, 0);
 
         let lookups = vec![(2, 5, 0), (1, 13, 0), (7, 19, 0)];
-        run_nlookup(3, lookups, vec![table]);
+        run_nlookup(3, lookups, vec![&table]);
     }
 
     #[test]
@@ -659,7 +629,7 @@ mod tests {
 
         let lookups = vec![(2, 5, 0), (1, 3, 0), (7, 19, 0)];
 
-        run_nlookup(4, lookups, vec![table.clone()]);
+        run_nlookup(4, lookups, vec![&table]);
 
         let big_lookups = vec![
             (2, 5, 0),
@@ -670,7 +640,7 @@ mod tests {
             (1, 3, 0),
         ];
 
-        run_nlookup(5, big_lookups, vec![table]);
+        run_nlookup(5, big_lookups, vec![&table]);
     }
 
     #[test]
@@ -685,7 +655,7 @@ mod tests {
 
         let lookups = vec![(2, 5, 0), (1, 3, 0), (0, 23, 1), (4, 41, 1)];
 
-        run_nlookup(2, lookups, vec![pub_table, priv_table]);
+        run_nlookup(2, lookups, vec![&pub_table, &priv_table]);
     }
 
     #[test]
@@ -700,7 +670,7 @@ mod tests {
 
         let lookups = vec![(2, 5, 19), (1, 3, 19), (0, 2, 19), (0, 23, 1), (4, 41, 1)];
 
-        run_nlookup(2, lookups, vec![pub_table, priv_table]);
+        run_nlookup(2, lookups, vec![&pub_table, &priv_table]);
     }
 
     #[test]
@@ -716,7 +686,7 @@ mod tests {
 
         let lookups = vec![(2, 5, 0), (1, 3, 0), (0, 23, 1), (4, 41, 1)];
 
-        run_nlookup(2, lookups, vec![pub_table, priv_table]);
+        run_nlookup(2, lookups, vec![&pub_table, &priv_table]);
     }
 
     #[test]
@@ -732,7 +702,7 @@ mod tests {
 
         let lookups = vec![(2, 5, 0), (1, 3, 1), (0, 23, 1), (4, 41, 1)];
 
-        run_nlookup(2, lookups, vec![pub_table, priv_table]);
+        run_nlookup(2, lookups, vec![&pub_table, &priv_table]);
     }
 
     #[test]
@@ -785,7 +755,7 @@ mod tests {
         for (ranges, lookups) in tests {
             let table = Table::new_proj(t.clone(), false, ranges, 1);
 
-            run_nlookup(2, lookups, vec![table]);
+            run_nlookup(2, lookups, vec![&table]);
         }
     }
 
@@ -799,7 +769,7 @@ mod tests {
         let table = Table::new_proj(t, false, ranges, 1);
 
         let lookups = vec![(1, 23, 1), (5, 43, 1)];
-        run_nlookup(2, lookups, vec![table]);
+        run_nlookup(2, lookups, vec![&table]);
     }
 
     #[test]
@@ -842,7 +812,7 @@ mod tests {
             let pub_table = Table::new_proj(pub_t.clone(), false, pub_ranges, 0);
             let priv_table = Table::new_proj(priv_t.clone(), false, priv_ranges, 1);
 
-            run_nlookup(2, lookups, vec![pub_table, priv_table]);
+            run_nlookup(2, lookups, vec![&pub_table, &priv_table]);
         }
     }
 
@@ -851,14 +821,14 @@ mod tests {
         let mut evals = vec![F::from(2), F::from(6), F::from(5), F::from(14)];
 
         let table = evals.clone();
-        let mut nl = NLookup::new(vec![Table::new(table, false, 0)], 3, None);
+        let mut nl = NLookup::new(vec![&Table::new(table, false, 0)], 3, None);
 
         let qs = vec![2, 1, 1];
         let last_q = vec![F::from(5), F::from(4)];
 
         let rho = F::from(3);
 
-        let running_v = nl.mle_eval(last_q.clone());
+        let running_v = nl.mle_eval(&last_q);
 
         let mut term = running_v;
         for i in 0..qs.len() {
@@ -898,7 +868,7 @@ mod tests {
 
         //sc_rs = sc_rs.into_iter().rev().collect();
         // next
-        let next_running_v = nl.mle_eval(sc_rs.clone());
+        let next_running_v = nl.mle_eval(&sc_rs);
         println!("nrv {:#?}", next_running_v.clone());
 
         // sanity check
