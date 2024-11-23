@@ -12,34 +12,27 @@ use nova_snark::{
 };
 
 #[derive(Clone, Debug)]
-pub struct Table<'a, A: arkPrimeField> {
-    pub t: &'a Vec<A>,
+pub struct Table<A: arkPrimeField> {
+    pub t: Vec<A>,
     pub priv_cmt: Option<A>, // T pub or priv?
     pub proj: Option<Vec<(usize, usize)>>,
     pub tag: usize,
 }
 
 // A must be ark_pallas::Fr
-impl<'a, A: arkPrimeField> Table<'a, A> {
-    pub fn new(t: &'a Vec<A>, private: bool, tag: usize) -> Self {
+impl<A: arkPrimeField> Table<A> {
+    pub fn new(mut t: Vec<A>, private: bool, tag: usize) -> Self {
         // we have to hardcode these, unfortunately
         type E1 = nova_snark::provider::PallasEngine;
         type E2 = nova_snark::provider::VestaEngine;
         type N1 = <E1 as Engine>::Scalar;
         type N2 = <E2 as Engine>::Scalar;
 
-        let mut ark_table = t.clone();
-        ark_table.extend(vec![
-            A::zero();
-            ark_table.len().next_power_of_two() - ark_table.len()
-        ]);
+        t.extend(vec![A::zero(); t.len().next_power_of_two() - t.len()]);
 
         let priv_cmt = if private {
             // convert to nova Fields
-            let nova_table = ark_table
-                .iter()
-                .map(|a| ark_to_nova_field::<A, N1>(a))
-                .collect();
+            let nova_table = t.iter().map(|a| ark_to_nova_field::<A, N1>(a)).collect();
 
             // commit using Hyrax
             let poly = MultilinearPolynomial::new(nova_table);
@@ -50,8 +43,10 @@ impl<'a, A: arkPrimeField> Table<'a, A> {
             let (doc_commit, doc_decommit) = prover_gens.commit(&poly);
 
             // using the commitment in the hash in circuit
-            let mut ro: PoseidonRO<N2, N1> =
-                PoseidonRO::new(PoseidonConstantsCircuit::default(), doc_commit.comm.len()); // TODO?
+            let mut ro: PoseidonRO<N2, N1> = PoseidonRO::new(
+                PoseidonConstantsCircuit::default(),
+                doc_commit.comm.len() * 3,
+            ); // TODO?
             for c in doc_commit.comm {
                 c.absorb_in_ro(&mut ro);
             }
@@ -76,12 +71,7 @@ impl<'a, A: arkPrimeField> Table<'a, A> {
     // you can include as many distinct ranges as you want,
     // func will automatically combine when valid
     // please do not abuse (i.e. a million len 1 ranges), func does not account for human stupidity
-    pub fn new_proj(
-        t: &'a Vec<A>,
-        priv_cmt: bool,
-        ranges: Vec<(usize, usize)>,
-        tag: usize,
-    ) -> Self {
+    pub fn new_proj(t: Vec<A>, priv_cmt: bool, ranges: Vec<(usize, usize)>, tag: usize) -> Self {
         let mut proj = Vec::new();
         assert!(ranges.len() >= 1);
 
