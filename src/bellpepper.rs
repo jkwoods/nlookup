@@ -30,7 +30,7 @@ pub trait AllocIoVar<V: ?Sized, A: arkField>: Sized + AllocVar<V, A> {
 impl<A: arkField> AllocIoVar<bool, A> for Boolean<A> {}
 impl<A: arkPrimeField> AllocIoVar<A, A> for FpVar<A> {}
 
-fn ark_to_nova_field<A: arkPrimeField, N: novaPrimeField<Repr = [u8; 32]>>(ark_ff: &A) -> N {
+pub fn ark_to_nova_field<A: arkPrimeField, N: novaPrimeField<Repr = [u8; 32]>>(ark_ff: &A) -> N {
     // ark F -> ark BigInt
     let b = ark_ff.into_bigint();
 
@@ -39,6 +39,14 @@ fn ark_to_nova_field<A: arkPrimeField, N: novaPrimeField<Repr = [u8; 32]>>(ark_f
 
     // bytes -> nova F
     N::from_repr(TryInto::<[u8; 32]>::try_into(bytes).unwrap()).unwrap()
+}
+
+pub fn nova_to_ark_field<N: novaPrimeField<Repr = [u8; 32]>, A: arkPrimeField>(nova_ff: &N) -> A {
+    // nova F -> bytes
+    let b = nova_ff.to_repr();
+
+    // bytes -> ark F
+    A::from_le_bytes_mod_order(&b)
 }
 
 fn bellpepper_lc<N: novaPrimeField, CS: ConstraintSystem<N>>(
@@ -203,7 +211,7 @@ mod tests {
 
     use crate::bellpepper::*;
     use crate::nlookup::*;
-    use ark_ff::{BigInt, One};
+    use ark_ff::{BigInt, One, Zero};
     use ark_r1cs_std::eq::EqGadget;
     use ark_relations::{
         lc,
@@ -217,6 +225,7 @@ mod tests {
         },
         CompressedSNARK, PublicParams, RecursiveSNARK,
     };
+    use rand::{rngs::OsRng, RngCore};
 
     type NG = pasta_curves::pallas::Point;
     type AF = ark_pallas::Fr;
@@ -245,6 +254,38 @@ mod tests {
             nova_val,
             <NG as Group>::Scalar::ZERO - <NG as Group>::Scalar::ONE
         );
+    }
+
+    #[test]
+    fn ff_reverse_convert() {
+        for v in vec![0, 1, 13, std::u64::MAX] {
+            let nova_val = <NG as Group>::Scalar::from(v);
+            let ark_val: AF = nova_to_ark_field(&nova_val);
+            assert_eq!(ark_val, AF::from(v));
+        }
+
+        // modulus
+        let nova_biggest = <NG as Group>::Scalar::ZERO - <NG as Group>::Scalar::ONE;
+        let ark_val: AF = nova_to_ark_field(&nova_biggest);
+        assert_eq!(ark_val, AF::zero() - AF::one());
+    }
+
+    #[test]
+    fn ff_metamorphic() {
+        for _ in 0..10 {
+            let mut bytes = [0, 32];
+            OsRng.fill_bytes(&mut bytes);
+
+            let ark_rand = AF::from_random_bytes(&bytes).unwrap();
+            let n: <NG as Group>::Scalar = ark_to_nova_field(&ark_rand);
+            let a: AF = nova_to_ark_field(&n);
+            assert_eq!(ark_rand, a);
+
+            let nova_rand = <NG as Group>::Scalar::random(&mut OsRng);
+            let a: AF = nova_to_ark_field(&nova_rand);
+            let n: <NG as Group>::Scalar = ark_to_nova_field(&a);
+            assert_eq!(nova_rand, n);
+        }
     }
 
     /*
