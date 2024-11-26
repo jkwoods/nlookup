@@ -4,6 +4,7 @@ use crate::{
 };
 use ark_ff::PrimeField as arkPrimeField;
 use ff::{PrimeField as novaPrimeField, PrimeFieldBits};
+use itertools::{Either, Either::*};
 use nova_snark::{
     provider::{
         hyrax_pc::HyraxPC,
@@ -180,44 +181,88 @@ impl<A: arkPrimeField> Table<A> {
     }
 
     // for now assume all tables public
-    fn calc_sub_v(sub_tables: Vec<&[A]>, q: &[A]) -> A {
-        //TODO
+    fn calc_sub_v(sub_tables: Vec<Either<&[A], usize>>, q: &[A]) -> A {
+        //        println!("sub_tables {:#?}, q {:#?}", sub_tables, q);
+        assert!(sub_tables.len() >= 1);
 
-        if q.len() == 0 {
-            // in this case, passed subtable should be the correct subset already
-            assert_eq!(sub_tables.len(), 1);
-            let ell = logmn(sub_tables[0].len());
-            let real_q = vec![A::zero(); ell];
-            mle_eval(sub_tables[0], &real_q)
-        } else if sub_tables.len() == 1 && logmn(sub_tables[0].len()) == q.len() {
-            mle_eval(sub_tables[0], q)
-        } else if sub_tables.len() == 1 && logmn(sub_tables[0].len()) != q.len() {
-            panic!("table length and q length mismatch");
+        if sub_tables.len() == 1 {
+            match sub_tables[0] {
+                Left(t) => {
+                    if q.len() == 0 {
+                        let ell = logmn(t.len());
+                        let real_q = vec![A::zero(); ell];
+
+                        mle_eval(t, &real_q)
+                    } else if logmn(t.len()) == q.len() {
+                        mle_eval(t, q)
+                    } else {
+                        panic!("table length and q length mismatch");
+                    }
+                }
+
+                Right(u) => {
+                    // end of table
+                    A::zero()
+                }
+            }
         } else {
-            let total_subtables_len: usize = sub_tables
-                .iter()
-                .map(|t| t.len())
-                .sum::<usize>()
-                .next_power_of_two();
-            assert!(total_subtables_len % 2 == 0);
+            let mut total_subtables_len: usize = 0;
+            for e in &sub_tables {
+                match e {
+                    Left(t) => {
+                        total_subtables_len += t.len();
+                    }
+                    Right(u) => {
+                        total_subtables_len += u;
+                    }
+                }
+            }
+
             let half_len = total_subtables_len / 2;
 
             let mut sub_vec_left = Vec::new();
             let mut sub_len = 0;
             let mut i = 0;
+            let mut right_remaining = 0;
             while sub_len < half_len {
-                sub_vec_left.push(sub_tables[i]);
-                sub_len += sub_tables[i].len();
+                match sub_tables[i] {
+                    Left(t) => {
+                        sub_vec_left.push(Left(t));
+                        sub_len += t.len();
+                    }
+                    Right(u) => {
+                        let remaining = half_len - sub_len;
+                        sub_vec_left.push(Right(remaining));
+                        sub_len = half_len;
+                        right_remaining = u - remaining;
+                    }
+                }
                 i += 1;
             }
             assert_eq!(sub_len, half_len);
+
             let mut sub_vec_right = Vec::new();
             sub_len = 0;
-            for j in i..sub_tables.len() {
-                sub_vec_right.push(sub_tables[j]);
-                sub_len += sub_tables[j].len();
+
+            if right_remaining != 0 {
+                assert_eq!(sub_tables.len(), i);
+                sub_vec_right.push(Right(right_remaining));
+            } else {
+                for j in i..sub_tables.len() {
+                    match sub_tables[j] {
+                        Left(t) => {
+                            sub_vec_right.push(Left(t));
+                            sub_len += t.len();
+                        }
+                        Right(u) => {
+                            let remaining = half_len - sub_len;
+                            sub_vec_right.push(Right(remaining));
+                            sub_len = half_len;
+                        }
+                    }
+                }
+                assert!(sub_len <= half_len);
             }
-            //assert_eq!(sub_len, half_len);
 
             (A::one() - q[0]) * Self::calc_sub_v(sub_vec_left, &q[1..])
                 + q[0] * Self::calc_sub_v(sub_vec_right, &q[1..])
@@ -230,7 +275,7 @@ impl<A: arkPrimeField> Table<A> {
         tables: Vec<&Table<A>>,
         running_q: Vec<A>,
     ) -> A {
-        println!("ORDERING INFO {:#?}", ordering_info);
+        //        println!("ORDERING INFO {:#?}", ordering_info);
 
         let mut hash_tag_table = HashMap::<usize, &Table<A>>::new();
         for t in tables {
@@ -238,6 +283,7 @@ impl<A: arkPrimeField> Table<A> {
         }
 
         let mut sliced_tables = Vec::new();
+        let mut table_len = 0;
         for (tag, proj) in ordering_info {
             let table = hash_tag_table[&tag];
 
@@ -247,7 +293,14 @@ impl<A: arkPrimeField> Table<A> {
                 assert_eq!(table.t.len(), proj.1 - proj.0);
             }
 
-            sliced_tables.push(&table.t[proj.0..proj.1]);
+            sliced_tables.push(Left(&table.t[proj.0..proj.1]));
+            table_len += (proj.1 - proj.0);
+        }
+
+        let full_table_len = table_len.next_power_of_two();
+        if table_len < full_table_len {
+            let filler = full_table_len - table_len;
+            sliced_tables.push(Right(filler));
         }
 
         Self::calc_sub_v(sliced_tables, &running_q)
