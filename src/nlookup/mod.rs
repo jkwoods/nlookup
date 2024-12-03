@@ -1,4 +1,4 @@
-use crate::{bellpepper::AllocIoVar, nlookup::table::*, utils::*};
+use crate::{bellpepper::*, nlookup::table::*, utils::*};
 use ark_crypto_primitives::sponge::poseidon::{
     constraints::PoseidonSpongeVar, PoseidonConfig, PoseidonSponge,
 };
@@ -21,38 +21,41 @@ use itertools::Itertools;
 use std::collections::HashMap;
 use std::ops::Range;
 
+use nova_snark::provider::hyrax_pc::HyraxPC;
+
 pub mod table;
 
 #[derive(Clone, Debug)]
-pub struct NLookupWires<F: PrimeField> {
-    pub q: Vec<(FpVar<F>, Vec<Boolean<F>>)>, // (field elt, bits)
-    pub v: Vec<FpVar<F>>,
-    pub prev_running_q: Vec<FpVar<F>>,
-    pub prev_running_v: FpVar<F>,
-    pub next_running_q: Vec<FpVar<F>>,
-    pub next_running_v: FpVar<F>,
+pub struct NLookupWires<A: PrimeField> {
+    pub q: Vec<(FpVar<A>, Vec<Boolean<A>>)>, // (field elt, bits)
+    pub v: Vec<FpVar<A>>,
+    pub prev_running_q: Vec<FpVar<A>>,
+    pub prev_running_v: FpVar<A>,
+    pub next_running_q: Vec<FpVar<A>>,
+    pub next_running_v: FpVar<A>,
 }
 
 #[derive(Debug)]
-pub struct NLookup<F: PrimeField> {
+pub struct NLookup<'a, A: PrimeField> {
     ell: usize, // for "big" table
     m: usize,
-    pcs: PoseidonConfig<F>,
-    table: Vec<F>,
-    priv_cmts: Vec<F>,
+    pcs: PoseidonConfig<A>,
+    table: Vec<A>,
+    small_table_refs: Vec<&'a Table<A>>,
+    priv_cmts: Vec<A>,
     tag_to_loc: HashMap<usize, Vec<(Range<usize>, isize)>>,
-    padding_lookup: (usize, F),
+    padding_lookup: (usize, A),
     ordering_info: Vec<(usize, (usize, usize))>, // (table tag, proj)
 }
 
 // initialize nlookup table, allowed to call circuit for multiple rounds
 // takes Tables with unique tags, the number of lookups per round
 // optionally, you can specify what "lookup" is used to pad non-full batches
-impl<F: PrimeField> NLookup<F> {
+impl<'a, A: PrimeField> NLookup<'a, A> {
     pub fn new(
-        tables: Vec<&Table<F>>,
+        tables: Vec<&'a Table<A>>,
         num_lookups: usize,
-        padding_lookup: Option<(usize, F)>,
+        padding_lookup: Option<(usize, A)>,
     ) -> Self {
         assert!(num_lookups > 0);
         assert!(tables.len() > 0);
@@ -62,10 +65,10 @@ impl<F: PrimeField> NLookup<F> {
         assert_eq!(unique_tags.len(), tables.len(), "Duplicate tags on tables");
 
         // accumulate subtables
-        let mut sub_tables = Vec::<(Vec<F>, usize, (usize, usize))>::new();
-        let mut priv_cmts = Vec::<F>::new();
+        let mut sub_tables = Vec::<(Vec<A>, usize, (usize, usize))>::new();
+        let mut priv_cmts = Vec::<A>::new();
 
-        for t in tables {
+        for t in &tables {
             match t.priv_cmt {
                 Some(cmt) => priv_cmts.push(cmt.clone()),
                 None => (),
@@ -96,7 +99,7 @@ impl<F: PrimeField> NLookup<F> {
         sub_tables = sub_tables
             .into_iter()
             .rev()
-            .collect::<Vec<(Vec<F>, usize, (usize, usize))>>();
+            .collect::<Vec<(Vec<A>, usize, (usize, usize))>>();
 
         let mut remaining_table_size = 0;
         let mut ordering_info = Vec::new();
@@ -106,7 +109,7 @@ impl<F: PrimeField> NLookup<F> {
         }
         remaining_table_size = remaining_table_size.next_power_of_two();
 
-        let mut table = Vec::<F>::new();
+        let mut table = Vec::<A>::new();
         let mut tag_to_loc = HashMap::<usize, Vec<(Range<usize>, isize)>>::new();
         // TODO: make sure projections and hybrid make sense?
 
@@ -127,11 +130,11 @@ impl<F: PrimeField> NLookup<F> {
             table.extend(st);
         }
 
-        table.extend(vec![F::zero(); remaining_table_size]);
+        table.extend(vec![A::zero(); remaining_table_size]);
 
         let ell = logmn(table.len());
 
-        let pcs: PoseidonConfig<F> =
+        let pcs: PoseidonConfig<A> =
             construct_poseidon_parameters_internal(4, 8, 56, 4, 5).unwrap(); //correct?
 
         let padding = if padding_lookup.is_some() {
@@ -153,6 +156,7 @@ impl<F: PrimeField> NLookup<F> {
             m: num_lookups,
             pcs,
             table,
+            small_table_refs: tables,
             priv_cmts,
             tag_to_loc,
             padding_lookup: padding,
@@ -160,10 +164,10 @@ impl<F: PrimeField> NLookup<F> {
         }
     }
 
-    pub fn first_running_claim(&self) -> (Vec<F>, F) {
-        let mut running_q = Vec::<F>::new();
+    pub fn first_running_claim(&self) -> (Vec<A>, A) {
+        let mut running_q = Vec::<A>::new();
         for i in 0..self.ell {
-            running_q.push(F::zero());
+            running_q.push(A::zero());
         }
 
         let running_v = self.table[0];
@@ -174,15 +178,15 @@ impl<F: PrimeField> NLookup<F> {
     // qs, vs taken in just as witnesses, fpvar wires returned
     pub fn nlookup_circuit_F(
         &mut self,
-        cs: ConstraintSystemRef<F>,
-        lookups: &Vec<(usize, F, usize)>, // (q, v, table tag), qs should correspond to original
+        cs: ConstraintSystemRef<A>,
+        lookups: &Vec<(usize, A, usize)>, // (q, v, table tag), qs should correspond to original
         // table
-        running_q: Vec<F>,
-        running_v: F,
-    ) -> Result<NLookupWires<F>, SynthesisError> {
-        let mut new_lookups = Vec::<(usize, FpVar<F>, usize)>::new();
+        running_q: Vec<A>,
+        running_v: A,
+    ) -> Result<NLookupWires<A>, SynthesisError> {
+        let mut new_lookups = Vec::<(usize, FpVar<A>, usize)>::new();
         for (qi, vi, tagi) in lookups.clone().into_iter() {
-            new_lookups.push((qi, FpVar::<F>::new_witness(cs.clone(), || Ok(vi))?, tagi));
+            new_lookups.push((qi, FpVar::<A>::new_witness(cs.clone(), || Ok(vi))?, tagi));
         }
 
         self.nlookup_circuit(cs, &new_lookups, running_q, running_v)
@@ -190,20 +194,20 @@ impl<F: PrimeField> NLookup<F> {
 
     pub fn nlookup_circuit(
         &mut self,
-        cs: ConstraintSystemRef<F>,
-        lookups: &Vec<(usize, FpVar<F>, usize)>, // (q, v, table tag), qs should correspond to original
+        cs: ConstraintSystemRef<A>,
+        lookups: &Vec<(usize, FpVar<A>, usize)>, // (q, v, table tag), qs should correspond to original
         // table
-        running_q: Vec<F>,
-        running_v: F,
-    ) -> Result<NLookupWires<F>, SynthesisError> {
+        running_q: Vec<A>,
+        running_v: A,
+    ) -> Result<NLookupWires<A>, SynthesisError> {
         assert_eq!(self.ell, running_q.len());
         assert!(lookups.len() > 0);
         assert!(lookups.len() <= self.m);
 
-        let mut q = Vec::<(FpVar<F>, Vec<Boolean<F>>)>::new();
+        let mut q = Vec::<(FpVar<A>, Vec<Boolean<A>>)>::new();
         let mut q_usize = Vec::<usize>::new();
-        let mut v = Vec::<FpVar<F>>::new();
-        let mut all_q_bits = Vec::<Boolean<F>>::new();
+        let mut v = Vec::<FpVar<A>>::new();
+        let mut all_q_bits = Vec::<Boolean<A>>::new();
         for (qi, vi, tagi) in lookups.clone().into_iter() {
             let mut offset = 0 as isize;
             let mut in_range = false;
@@ -221,25 +225,25 @@ impl<F: PrimeField> NLookup<F> {
             // sanity
             assert_eq!(self.table[actual_idx as usize], vi.value()?);
 
-            let qi_var = FpVar::<F>::new_witness(cs.clone(), || Ok(F::from(actual_idx as u64)))?; // change
+            let qi_var = FpVar::<A>::new_witness(cs.clone(), || Ok(A::from(actual_idx as u64)))?; // change
                                                                                                   // later?
             let (qi_bits, _) = qi_var.to_bits_le_with_top_bits_zero(self.ell)?;
             all_q_bits.extend(qi_bits.clone());
             q.push((qi_var, qi_bits));
 
             v.push(vi);
-            //    FpVar::<F>::new_witness(cs.clone(), || Ok(vi))?);
+            //    FpVar::<A>::new_witness(cs.clone(), || Ok(vi))?);
         }
 
         while q.len() < self.m {
             q_usize.push(self.padding_lookup.0);
             let qi_var =
-                FpVar::<F>::new_witness(cs.clone(), || Ok(F::from(self.padding_lookup.0 as u64)))?;
+                FpVar::<A>::new_witness(cs.clone(), || Ok(A::from(self.padding_lookup.0 as u64)))?;
             let (qi_bits, _) = qi_var.to_bits_le_with_top_bits_zero(self.ell)?;
             all_q_bits.extend(qi_bits.clone());
             q.push((qi_var, qi_bits));
 
-            v.push(FpVar::<F>::new_witness(cs.clone(), || {
+            v.push(FpVar::<A>::new_witness(cs.clone(), || {
                 Ok(self.padding_lookup.1)
             })?);
         }
@@ -249,18 +253,18 @@ impl<F: PrimeField> NLookup<F> {
             q.clone()
                 .into_iter()
                 .map(|(val, b)| val.value().unwrap())
-                .collect::<Vec<F>>(),
+                .collect::<Vec<A>>(),
             v.clone()
                 .into_iter()
                 .map(|val| val.value().unwrap())
-                .collect::<Vec<F>>()
+                .collect::<Vec<A>>()
         );
 
-        let mut running_q_vars = Vec::<FpVar<F>>::new();
+        let mut running_q_vars = Vec::<FpVar<A>>::new();
         for rqi in 0..running_q.len() {
-            running_q_vars.push(FpVar::<F>::new_witness(cs.clone(), || Ok(running_q[rqi]))?);
+            running_q_vars.push(FpVar::<A>::new_witness(cs.clone(), || Ok(running_q[rqi]))?);
         }
-        let running_v_var = FpVar::<F>::new_witness(cs.clone(), || Ok(F::from(running_v)))?;
+        let running_v_var = FpVar::<A>::new_witness(cs.clone(), || Ok(A::from(running_v)))?;
 
         // q processing (combine)
         let mut combined_qs = Vec::new();
@@ -268,7 +272,7 @@ impl<F: PrimeField> NLookup<F> {
             let mut bits = Vec::new();
             let mut i = 0;
             while let Some(bit) = all_q_bits.pop() {
-                if i < (F::MODULUS_BIT_SIZE as usize - 1) {
+                if i < (A::MODULUS_BIT_SIZE as usize - 1) {
                     bits.push(bit);
                     i += 1;
                 } else {
@@ -278,13 +282,13 @@ impl<F: PrimeField> NLookup<F> {
             combined_qs.push(Boolean::le_bits_to_fp(&bits)?);
         }
 
-        let mut sponge = PoseidonSpongeVar::<F>::new(cs.clone(), &self.pcs);
+        let mut sponge = PoseidonSpongeVar::<A>::new(cs.clone(), &self.pcs);
 
         // sponge aborbs qs, vs, running q, running v, and possibly doc commit
-        let mut query = Vec::<FpVar<F>>::new();
+        let mut query = Vec::<FpVar<A>>::new();
         for cmt in &self.priv_cmts {
-            query.push(FpVar::<F>::new_witness(cs.clone(), || {
-                Ok(F::from(cmt.clone()))
+            query.push(FpVar::<A>::new_witness(cs.clone(), || {
+                Ok(A::from(cmt.clone()))
             })?);
         }
         query.extend(combined_qs);
@@ -319,7 +323,7 @@ impl<F: PrimeField> NLookup<F> {
         )?]; //??
 
         for i in 0..self.m {
-            let mut qi_vec = Vec::<FpVar<F>>::new();
+            let mut qi_vec = Vec::<FpVar<A>>::new();
             for qij in q[i].1.iter() {
                 let qij_vec = qij.to_constraint_field()?;
                 assert_eq!(qij_vec.len(), 1);
@@ -330,7 +334,7 @@ impl<F: PrimeField> NLookup<F> {
         }
         let eq_eval = horners(&eq_evals, &rho);
 
-        let next_running_v = FpVar::<F>::new_witness(cs.clone(), || {
+        let next_running_v = FpVar::<A>::new_witness(cs.clone(), || {
             Ok(self.mle_eval(&next_running_q.iter().map(|x| x.value().unwrap()).collect()))
         })?;
 
@@ -338,8 +342,8 @@ impl<F: PrimeField> NLookup<F> {
         last_claim.enforce_equal(&(eq_eval * &next_running_v))?;
 
         // inputize
-        let mut in_running_q: Vec<FpVar<F>> = Vec::new();
-        let mut out_next_running_q: Vec<FpVar<F>> = Vec::new();
+        let mut in_running_q: Vec<FpVar<A>> = Vec::new();
+        let mut out_next_running_q: Vec<FpVar<A>> = Vec::new();
         for i in 0..running_q_vars.len() {
             let (iq, oq) = FpVar::new_input_output_pair(
                 cs.clone(),
@@ -371,23 +375,23 @@ impl<F: PrimeField> NLookup<F> {
 
     fn sum_check(
         &mut self,
-        cs: ConstraintSystemRef<F>,
-        init_claim: FpVar<F>,
-        mut sponge: PoseidonSpongeVar<F>,
-        mut temp_eq: Vec<F>,
-    ) -> Result<(Vec<FpVar<F>>, FpVar<F>), SynthesisError> {
+        cs: ConstraintSystemRef<A>,
+        init_claim: FpVar<A>,
+        mut sponge: PoseidonSpongeVar<A>,
+        mut temp_eq: Vec<A>,
+    ) -> Result<(Vec<FpVar<A>>, FpVar<A>), SynthesisError> {
         let mut temp_table = self.table.clone(); // todo
 
         // current claim in each round
         let mut claim = init_claim.clone();
 
-        let mut rands = Vec::<FpVar<F>>::new();
+        let mut rands = Vec::<FpVar<A>>::new();
         for j in 0..self.ell {
             let (con, x, xsq) = self.prover_msg(j, &temp_table, &temp_eq);
 
-            let g_j_const = FpVar::<F>::new_witness(cs.clone(), || Ok(con))?;
-            let g_j_x = FpVar::<F>::new_witness(cs.clone(), || Ok(x))?;
-            let g_j_xsq = FpVar::<F>::new_witness(cs.clone(), || Ok(xsq))?;
+            let g_j_const = FpVar::<A>::new_witness(cs.clone(), || Ok(con))?;
+            let g_j_x = FpVar::<A>::new_witness(cs.clone(), || Ok(x))?;
+            let g_j_xsq = FpVar::<A>::new_witness(cs.clone(), || Ok(xsq))?;
 
             // sanity
             assert_eq!(
@@ -415,10 +419,10 @@ impl<F: PrimeField> NLookup<F> {
 
     fn bit_eq(
         &mut self,
-        qi: &Vec<FpVar<F>>,
-        r: &Vec<FpVar<F>>,
-    ) -> Result<FpVar<F>, SynthesisError> {
-        let mut eq = Vec::<FpVar<F>>::new();
+        qi: &Vec<FpVar<A>>,
+        r: &Vec<FpVar<A>>,
+    ) -> Result<FpVar<A>, SynthesisError> {
+        let mut eq = Vec::<FpVar<A>>::new();
         for j in (0..self.ell).rev() {
             let next = (&qi[j] * &r[self.ell - j - 1])
                 + ((FpVar::one() - &qi[j]) * (FpVar::one() - &r[self.ell - j - 1]));
@@ -434,16 +438,16 @@ impl<F: PrimeField> NLookup<F> {
     }
 
     // starts with evals on hypercube
-    fn prover_msg(&self, i: usize, temp_table: &Vec<F>, temp_eq: &Vec<F>) -> (F, F, F) {
+    fn prover_msg(&self, i: usize, temp_table: &Vec<A>, temp_eq: &Vec<A>) -> (A, A, A) {
         let base: usize = 2;
         let pow: usize = base.pow((self.ell - i - 1) as u32);
 
         assert_eq!(temp_table.len(), base.pow(self.ell as u32));
         assert_eq!(temp_eq.len(), base.pow(self.ell as u32));
 
-        let mut xsq = F::zero();
-        let mut x = F::zero();
-        let mut con = F::zero();
+        let mut xsq = A::zero();
+        let mut x = A::zero();
+        let mut con = A::zero();
 
         for b in 0..pow {
             let ti_0 = temp_table[b];
@@ -463,37 +467,37 @@ impl<F: PrimeField> NLookup<F> {
         (con, x, xsq)
     }
 
-    fn update_tables(&mut self, r_i: F, i: usize, temp_table: &mut Vec<F>, temp_eq: &mut Vec<F>) {
+    fn update_tables(&mut self, r_i: A, i: usize, temp_table: &mut Vec<A>, temp_eq: &mut Vec<A>) {
         let base: usize = 2;
         let pow: usize = base.pow((self.ell - i - 1) as u32);
 
         for b in 0..pow {
-            temp_table[b] = temp_table[b] * (F::one() - r_i) + temp_table[b + pow] * r_i;
-            temp_eq[b] = temp_eq[b] * (F::one() - r_i) + temp_eq[b + pow] * r_i;
+            temp_table[b] = temp_table[b] * (A::one() - r_i) + temp_table[b + pow] * r_i;
+            temp_eq[b] = temp_eq[b] * (A::one() - r_i) + temp_eq[b + pow] * r_i;
         }
     }
 
-    fn mle_eval(&self, x: &Vec<F>) -> F {
+    fn mle_eval(&self, x: &Vec<A>) -> A {
         assert_eq!(x.len(), self.ell);
 
         mle_eval(&self.table, x)
     }
 
-    fn gen_eq_table(rho: F, qs: &Vec<usize>, last_q: &Vec<F>) -> Vec<F> {
+    fn gen_eq_table(rho: A, qs: &Vec<usize>, last_q: &Vec<A>) -> Vec<A> {
         let base: usize = 2;
         let ell: usize = last_q.len();
         let t_len = base.pow(ell as u32);
 
-        let mut rhos = Vec::<F>::new();
+        let mut rhos = Vec::<A>::new();
         rhos.push(rho);
         if qs.len() > 1 {
             for i in 0..(qs.len() - 1) {
                 rhos.push(rhos[i] * rho);
             }
         }
-        rhos.push(F::one());
+        rhos.push(A::one());
 
-        let mut eq_t = vec![F::zero(); t_len];
+        let mut eq_t = vec![A::zero(); t_len];
 
         for i in 0..qs.len() {
             eq_t[qs[i]] += rhos[i];
@@ -504,13 +508,54 @@ impl<F: PrimeField> NLookup<F> {
 
             for j in (0..ell).rev() {
                 let xi = (i >> j) & 1;
-                term *= F::from(xi as u64) * last_q[j]
-                    + (F::one() - F::from(xi as u64)) * (F::one() - last_q[j]);
+                term *= A::from(xi as u64) * last_q[j]
+                    + (A::one() - A::from(xi as u64)) * (A::one() - last_q[j]);
             }
             eq_t[i] += term;
         }
 
         eq_t
+    }
+
+    pub fn verify_running_claim(
+        &self,
+        verifier_gens: &HyraxPC<E1>,
+        q: &Vec<N1>,
+        proofs: &mut HashMap<usize, NLProofInfo>,
+    ) {
+        let ark_q: Vec<A> = q.iter().map(|x| nova_to_ark_field::<N1, A>(x)).collect();
+
+        // TODO - eq proof
+        Table::calc_running_claim(
+            &self.ordering_info,
+            self.small_table_refs.clone(),
+            ark_q,
+            false,
+            Some(verifier_gens),
+            proofs,
+        );
+    }
+
+    pub fn prove_running_claim(
+        &self,
+        prover_gens: &HyraxPC<E1>,
+        q: &Vec<N1>,
+    ) -> (A, HashMap<usize, NLProofInfo>) {
+        let ark_q: Vec<A> = q.iter().map(|x| nova_to_ark_field::<N1, A>(x)).collect();
+
+        let mut proofs = HashMap::new();
+        let ark_v = Table::calc_running_claim(
+            &self.ordering_info,
+            self.small_table_refs.clone(),
+            ark_q,
+            true,
+            Some(prover_gens),
+            &mut proofs,
+        );
+        match ark_v {
+            VComp::ArkScalar(a) => (a, proofs),
+            _ => panic!("something went wrong with prover types"),
+        }
     }
 }
 
@@ -518,30 +563,33 @@ impl<F: PrimeField> NLookup<F> {
 
 mod tests {
 
+    use crate::bellpepper::*;
     use crate::nlookup::*;
     use ark_ff::{Field, PrimeField};
-    use ark_pallas::Fr as F;
+    use ark_pallas::Fr as A;
     use ark_relations::r1cs::{ConstraintSystem, OptimizationGoal};
+    use nova_snark::provider::hyrax_pc::HyraxPC;
     use nova_snark::traits::Engine;
 
-    type E1 = nova_snark::provider::PallasEngine;
-    type N1 = <E1 as Engine>::Scalar;
-    type N2 = <nova_snark::provider::VestaEngine as Engine>::Scalar;
-
-    fn run_nlookup(batch_size: usize, qv: Vec<(usize, usize, usize)>, tables: Vec<&Table<F>>) {
+    fn run_nlookup(
+        batch_size: usize,
+        qv: Vec<(usize, usize, usize)>,
+        tables: Vec<&Table<A>>,
+        gens: &HyraxPC<E1>,
+    ) {
         let rounds = ((qv.len() as f32) / (batch_size as f32)).ceil() as usize;
         println!("ROUNDS {:#?}", rounds);
 
-        let lookups: Vec<(usize, F, usize)> = qv
+        let lookups: Vec<(usize, A, usize)> = qv
             .into_iter()
-            .map(|(q, v, t)| (q, F::from(v as u64), t))
+            .map(|(q, v, t)| (q, A::from(v as u64), t))
             .collect();
 
         let mut nl = NLookup::new(tables.clone(), batch_size, None);
         let (mut running_q, mut running_v) = nl.first_running_claim();
 
         for i in 0..rounds {
-            let cs = ConstraintSystem::<F>::new_ref();
+            let cs = ConstraintSystem::<A>::new_ref();
             cs.set_optimization_goal(OptimizationGoal::Constraints);
 
             let lu_end = if (i + 1) * batch_size < lookups.len() {
@@ -572,26 +620,30 @@ mod tests {
             assert!(cs.is_satisfied().unwrap(), "Failed at iter {}", i);
         }
 
-        let v_calc = Table::calc_running_claim(nl.ordering_info, tables, running_q);
+        // obv double conversion is bad - just for testing
+        let nova_q = running_q.iter().map(|x| ark_to_nova_field(x)).collect();
+        let (v_calc, mut proofs) = nl.prove_running_claim(&gens, &nova_q);
         assert_eq!(v_calc, running_v);
+        nl.verify_running_claim(&gens, &nova_q, &mut proofs);
     }
 
     #[test]
     fn nl_basic() {
         let t_pre = vec![2, 3, 5, 7, 9, 13, 17, 19];
-        let t: Vec<F> = t_pre.into_iter().map(|x| F::from(x as u64)).collect();
-        let table = Table::new(t, false, 0);
+        let t: Vec<A> = t_pre.into_iter().map(|x| A::from(x as u64)).collect();
+        let table = Table::new(t, false, 0, None);
 
         let lookups = vec![(2, 5, 0), (1, 3, 0), (7, 19, 0)];
 
-        run_nlookup(3, lookups, vec![&table]);
+        let gens = HyraxPC::setup(b"test", logmn(8));
+        run_nlookup(3, lookups, vec![&table], &gens);
     }
 
     #[test]
     fn nl_many_lookups() {
         let t_pre = vec![2, 3, 5, 7, 9, 13, 17, 19];
-        let t: Vec<F> = t_pre.into_iter().map(|x| F::from(x as u64)).collect();
-        let table = Table::new(t, false, 0);
+        let t: Vec<A> = t_pre.into_iter().map(|x| A::from(x as u64)).collect();
+        let table = Table::new(t, false, 0, None);
 
         let lookups = vec![
             (2, 5, 0),
@@ -604,32 +656,35 @@ mod tests {
             (1, 3, 0),
         ];
 
-        run_nlookup(8, lookups.clone(), vec![&table]);
-        run_nlookup(4, lookups.clone(), vec![&table]);
-        run_nlookup(2, lookups.clone(), vec![&table]);
-        run_nlookup(1, lookups.clone(), vec![&table]);
+        let gens = HyraxPC::setup(b"test", logmn(8));
+        run_nlookup(8, lookups.clone(), vec![&table], &gens);
+        run_nlookup(4, lookups.clone(), vec![&table], &gens);
+        run_nlookup(2, lookups.clone(), vec![&table], &gens);
+        run_nlookup(1, lookups.clone(), vec![&table], &gens);
     }
 
     #[test]
     #[should_panic]
     fn nl_bad_lookup() {
         let t_pre = vec![2, 3, 5, 7, 9, 13, 17, 19];
-        let t: Vec<F> = t_pre.into_iter().map(|x| F::from(x as u64)).collect();
-        let table = Table::new(t, false, 0);
+        let t: Vec<A> = t_pre.into_iter().map(|x| A::from(x as u64)).collect();
+        let table = Table::new(t, false, 0, None);
 
         let lookups = vec![(2, 5, 0), (1, 13, 0), (7, 19, 0)];
-        run_nlookup(3, lookups, vec![&table]);
+        let gens = HyraxPC::setup(b"test", logmn(8));
+        run_nlookup(3, lookups, vec![&table], &gens);
     }
 
     #[test]
     fn nl_padding() {
         let t_pre = vec![2, 3, 5, 7, 9, 13, 17, 19];
-        let t: Vec<F> = t_pre.into_iter().map(|x| F::from(x as u64)).collect();
-        let table = Table::new(t, false, 0);
+        let t: Vec<A> = t_pre.into_iter().map(|x| A::from(x as u64)).collect();
+        let table = Table::new(t, false, 0, None);
 
         let lookups = vec![(2, 5, 0), (1, 3, 0), (7, 19, 0)];
 
-        run_nlookup(4, lookups, vec![&table]);
+        let gens = HyraxPC::setup(b"test", logmn(8));
+        run_nlookup(4, lookups, vec![&table], &gens);
 
         let big_lookups = vec![
             (2, 5, 0),
@@ -640,69 +695,73 @@ mod tests {
             (1, 3, 0),
         ];
 
-        run_nlookup(5, big_lookups, vec![&table]);
+        run_nlookup(5, big_lookups, vec![&table], &gens);
     }
 
     #[test]
     fn nl_hybrid() {
         let t_pre = vec![2, 3, 5, 7, 9, 13, 17, 19];
-        let t: Vec<F> = t_pre.into_iter().map(|x| F::from(x as u64)).collect();
-        let pub_table = Table::new(t, false, 0);
+        let t: Vec<A> = t_pre.into_iter().map(|x| A::from(x as u64)).collect();
+        let pub_table = Table::new(t, false, 0, None);
 
         let t_pre = vec![23, 29, 31, 37, 41, 43, 47, 53];
-        let t: Vec<F> = t_pre.into_iter().map(|x| F::from(x as u64)).collect();
-        let priv_table = Table::new(t, true, 1);
+        let t: Vec<A> = t_pre.into_iter().map(|x| A::from(x as u64)).collect();
+        let gens = HyraxPC::setup(b"test", logmn(8));
+        let priv_table = Table::new(t, true, 1, Some(&gens));
 
         let lookups = vec![(2, 5, 0), (1, 3, 0), (0, 23, 1), (4, 41, 1)];
 
-        run_nlookup(2, lookups, vec![&pub_table, &priv_table]);
+        run_nlookup(2, lookups, vec![&pub_table, &priv_table], &gens);
     }
 
     #[test]
     fn nl_hybrid_size() {
         let t_pre = vec![2, 3, 5];
-        let t: Vec<F> = t_pre.into_iter().map(|x| F::from(x as u64)).collect();
-        let pub_table = Table::new(t, false, 19);
+        let t: Vec<A> = t_pre.into_iter().map(|x| A::from(x as u64)).collect();
+        let pub_table = Table::new(t, false, 19, None);
 
         let t_pre = vec![23, 29, 31, 37, 41, 43, 47, 53];
-        let t: Vec<F> = t_pre.into_iter().map(|x| F::from(x as u64)).collect();
-        let priv_table = Table::new(t, true, 1);
+        let t: Vec<A> = t_pre.into_iter().map(|x| A::from(x as u64)).collect();
+        let gens = HyraxPC::setup(b"test", logmn(8));
+        let priv_table = Table::new(t, true, 1, Some(&gens));
 
         let lookups = vec![(2, 5, 19), (1, 3, 19), (0, 2, 19), (0, 23, 1), (4, 41, 1)];
 
-        run_nlookup(2, lookups, vec![&pub_table, &priv_table]);
+        run_nlookup(2, lookups, vec![&pub_table, &priv_table], &gens);
     }
 
     #[test]
     #[should_panic]
     fn nl_hybrid_dup_tags() {
         let t_pre = vec![2, 3, 5, 7, 9, 13, 17, 19];
-        let t: Vec<F> = t_pre.into_iter().map(|x| F::from(x as u64)).collect();
-        let pub_table = Table::new(t, false, 4);
+        let t: Vec<A> = t_pre.into_iter().map(|x| A::from(x as u64)).collect();
+        let pub_table = Table::new(t, false, 4, None);
 
         let t_pre = vec![23, 29, 31, 37, 41, 43, 47, 53];
-        let t: Vec<F> = t_pre.into_iter().map(|x| F::from(x as u64)).collect();
-        let priv_table = Table::new(t, true, 4);
+        let t: Vec<A> = t_pre.into_iter().map(|x| A::from(x as u64)).collect();
+        let gens = HyraxPC::setup(b"test", logmn(8));
+        let priv_table = Table::new(t, true, 4, Some(&gens));
 
         let lookups = vec![(2, 5, 0), (1, 3, 0), (0, 23, 1), (4, 41, 1)];
 
-        run_nlookup(2, lookups, vec![&pub_table, &priv_table]);
+        run_nlookup(2, lookups, vec![&pub_table, &priv_table], &gens);
     }
 
     #[test]
     #[should_panic]
     fn nl_hybrid_bad_tags() {
         let t_pre = vec![2, 3, 5, 7, 9, 13, 17, 19];
-        let t: Vec<F> = t_pre.into_iter().map(|x| F::from(x as u64)).collect();
-        let pub_table = Table::new(t, false, 0);
+        let t: Vec<A> = t_pre.into_iter().map(|x| A::from(x as u64)).collect();
+        let pub_table = Table::new(t, false, 0, None);
 
         let t_pre = vec![23, 29, 31, 37, 41, 43, 47, 53];
-        let t: Vec<F> = t_pre.into_iter().map(|x| F::from(x as u64)).collect();
-        let priv_table = Table::new(t, true, 1);
+        let t: Vec<A> = t_pre.into_iter().map(|x| A::from(x as u64)).collect();
+        let gens = HyraxPC::setup(b"test", logmn(8));
+        let priv_table = Table::new(t, true, 1, Some(&gens));
 
         let lookups = vec![(2, 5, 0), (1, 3, 1), (0, 23, 1), (4, 41, 1)];
 
-        run_nlookup(2, lookups, vec![&pub_table, &priv_table]);
+        run_nlookup(2, lookups, vec![&pub_table, &priv_table], &gens);
     }
 
     #[test]
@@ -723,8 +782,8 @@ mod tests {
         ];
 
         for (len, ranges, expected) in tests {
-            let t = vec![F::from(3); len];
-            let table = Table::new_proj(t, false, ranges, 0);
+            let t = vec![A::from(3); len];
+            let table = Table::new_proj(t, false, ranges, 0, None);
 
             match expected {
                 Some(proj) => assert_eq!(table.proj.unwrap(), proj),
@@ -736,7 +795,7 @@ mod tests {
     #[test]
     fn nl_proj() {
         let t_pre = vec![23, 29, 31, 37, 41, 43, 47, 53];
-        let t: Vec<F> = t_pre.into_iter().map(|x| F::from(x as u64)).collect();
+        let t: Vec<A> = t_pre.into_iter().map(|x| A::from(x as u64)).collect();
 
         let tests = vec![
             (vec![(0, 8)], vec![(2, 31, 1), (0, 23, 1), (4, 41, 1)]),
@@ -752,10 +811,11 @@ mod tests {
             ),
         ];
 
+        let gens = HyraxPC::setup(b"test", logmn(t.len()));
         for (ranges, lookups) in tests {
-            let table = Table::new_proj(t.clone(), false, ranges, 1);
+            let table = Table::new_proj(t.clone(), false, ranges, 1, None);
 
-            run_nlookup(2, lookups, vec![&table]);
+            run_nlookup(2, lookups, vec![&table], &gens);
         }
     }
 
@@ -763,22 +823,24 @@ mod tests {
     #[should_panic]
     fn nl_proj_bad() {
         let t_pre = vec![23, 29, 31, 37, 41, 43, 47, 53];
-        let t: Vec<F> = t_pre.into_iter().map(|x| F::from(x as u64)).collect();
+        let t: Vec<A> = t_pre.into_iter().map(|x| A::from(x as u64)).collect();
 
         let ranges = vec![(1, 4), (6, 8)];
-        let table = Table::new_proj(t, false, ranges, 1);
+        let table = Table::new_proj(t, false, ranges, 1, None);
 
         let lookups = vec![(1, 23, 1), (5, 43, 1)];
-        run_nlookup(2, lookups, vec![&table]);
+
+        let gens = HyraxPC::setup(b"test", logmn(8));
+        run_nlookup(2, lookups, vec![&table], &gens);
     }
 
     #[test]
     fn nl_hybrid_and_proj() {
         let t_pre = vec![2, 3, 5, 7, 9, 13, 17, 19];
-        let pub_t: Vec<F> = t_pre.into_iter().map(|x| F::from(x as u64)).collect();
+        let pub_t: Vec<A> = t_pre.into_iter().map(|x| A::from(x as u64)).collect();
 
         let t_pre = vec![23, 29, 31, 37, 41, 43, 47, 53];
-        let priv_t: Vec<F> = t_pre.into_iter().map(|x| F::from(x as u64)).collect();
+        let priv_t: Vec<A> = t_pre.into_iter().map(|x| A::from(x as u64)).collect();
 
         let tests = vec![
             (
@@ -808,25 +870,27 @@ mod tests {
             ),
         ];
 
+        let gens = HyraxPC::setup(b"test", logmn(priv_t.len()));
         for (pub_ranges, priv_ranges, lookups) in tests {
-            let pub_table = Table::new_proj(pub_t.clone(), false, pub_ranges, 0);
-            let priv_table = Table::new_proj(priv_t.clone(), false, priv_ranges, 1);
+            let pub_table = Table::new_proj(pub_t.clone(), false, pub_ranges, 0, None);
+            let priv_table = Table::new_proj(priv_t.clone(), false, priv_ranges, 1, Some(&gens));
 
-            run_nlookup(2, lookups, vec![&pub_table, &priv_table]);
+            run_nlookup(2, lookups, vec![&pub_table, &priv_table], &gens);
         }
     }
 
     #[test]
     fn mle_basic() {
-        let mut evals = vec![F::from(2), F::from(6), F::from(5), F::from(14)];
+        let mut evals = vec![A::from(2), A::from(6), A::from(5), A::from(14)];
 
         let table = evals.clone();
-        let mut nl = NLookup::new(vec![&Table::new(table, false, 0)], 3, None);
+        let t = Table::new(table, false, 0, None);
+        let mut nl = NLookup::new(vec![&t], 3, None);
 
         let qs = vec![2, 1, 1];
-        let last_q = vec![F::from(5), F::from(4)];
+        let last_q = vec![A::from(5), A::from(4)];
 
-        let rho = F::from(3);
+        let rho = A::from(3);
 
         let running_v = nl.mle_eval(&last_q);
 
@@ -842,7 +906,7 @@ mod tests {
         let mut eq_a = NLookup::gen_eq_table(rho, &qs, &last_q.clone().into_iter().rev().collect());
 
         // claim check
-        let mut claim: F = evals
+        let mut claim: A = evals
             .iter()
             .zip(eq_a.iter())
             .map(|(ti, eqi)| ti * eqi)
@@ -856,9 +920,9 @@ mod tests {
             let (con, x, xsq) = nl.prover_msg(i, &mut evals, &mut eq_a);
             println!("prov msg {:#?} {:#?} {:#?}", con, x, xsq);
 
-            let r_i = if i == 0 { F::from(3) } else { F::from(2) };
+            let r_i = if i == 0 { A::from(3) } else { A::from(2) };
 
-            let g0_g1 = F::from(2) * &con + &x + &xsq;
+            let g0_g1 = A::from(2) * &con + &x + &xsq;
             assert_eq!(claim, g0_g1,);
 
             claim = xsq * &r_i * &r_i + x * &r_i + con;
@@ -873,12 +937,12 @@ mod tests {
 
         // sanity check
         // eq_term = rhos * eq(qi, sc_rs_i)
-        let mut eq_term = F::from(0);
+        let mut eq_term = A::from(0);
         println!("loop");
         for i in 0..qs.len() {
-            let mut eq = F::from(1);
+            let mut eq = A::from(1);
             for j in (0..nl.ell).rev() {
-                let qij = F::from(((qs[i] >> j) & 1) as u64);
+                let qij = A::from(((qs[i] >> j) & 1) as u64);
                 println!(
                     "qij {:#?} -> {:#?}, scrs ij {:#?}",
                     qs[i],
@@ -886,7 +950,7 @@ mod tests {
                     sc_rs[j].clone()
                 );
                 eq *= qij * &sc_rs[nl.ell - j - 1]
-                    + (F::from(1) - qij) * (F::from(1) - &sc_rs[nl.ell - j - 1]);
+                    + (A::from(1) - qij) * (A::from(1) - &sc_rs[nl.ell - j - 1]);
             }
 
             let mut rho_pow = rho;
@@ -899,11 +963,11 @@ mod tests {
         }
         // last q
         sc_rs = sc_rs.into_iter().rev().collect();
-        let mut eq = F::from(1);
+        let mut eq = A::from(1);
         for j in (0..nl.ell).rev() {
             let qij = last_q[j];
             eq *= qij * &sc_rs[nl.ell - j - 1]
-                + (F::from(1) - qij) * (F::from(1) - &sc_rs[nl.ell - j - 1]);
+                + (A::from(1) - qij) * (A::from(1) - &sc_rs[nl.ell - j - 1]);
         }
         println!("last q eq term {:#?}", eq.clone());
         eq_term += eq;

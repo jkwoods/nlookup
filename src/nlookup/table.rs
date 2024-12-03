@@ -3,70 +3,136 @@ use crate::{
     utils::{logmn, mle_eval},
 };
 use ark_ff::PrimeField as arkPrimeField;
-use ff::{PrimeField as novaPrimeField, PrimeFieldBits};
-use itertools::{Either, Either::*};
+use ff::{Field as novaField, PrimeField as novaPrimeField, PrimeFieldBits};
 use nova_snark::{
     provider::{
-        hyrax_pc::HyraxPC,
+        hyrax_pc::{HyraxPC, PolyCommit, PolyCommitBlinds},
+        pedersen::Commitment,
         poseidon::{PoseidonConstantsCircuit, PoseidonRO},
-        traits::DlogGroup,
+        zk_ipa_pc::{InnerProductArgument, InnerProductWitness},
     },
     spartan::polys::multilinear::MultilinearPolynomial,
-    traits::{AbsorbInROTrait, Engine, ROTrait},
+    traits::{AbsorbInROTrait, Engine, ROTrait, TranscriptEngineTrait},
 };
+use rand::rngs::OsRng;
 use std::collections::HashMap;
+use std::ops::{Add, Mul};
 
 // we have to hardcode these, unfortunately
-type E1 = nova_snark::provider::PallasEngine;
-type E2 = nova_snark::provider::VestaEngine;
-type N1 = <E1 as Engine>::Scalar;
-type N2 = <E2 as Engine>::Scalar;
+pub(crate) type E1 = nova_snark::provider::PallasEngine;
+pub(crate) type E2 = nova_snark::provider::VestaEngine;
+pub(crate) type N1 = <E1 as Engine>::Scalar;
+pub(crate) type N2 = <E2 as Engine>::Scalar;
 
 #[derive(Clone, Debug)]
 pub struct Table<A: arkPrimeField> {
     pub t: Vec<A>,
     nova_t: Option<MultilinearPolynomial<N1>>,
+    nova_t_cmt: Option<PolyCommit<E1>>,
+    nova_t_decmt: Option<PolyCommitBlinds<E1>>,
     pub priv_cmt: Option<A>, // T pub or priv?
     pub proj: Option<Vec<(usize, usize)>>,
     pub tag: usize,
 }
 
+#[derive(Clone, Debug)]
+enum TableInfo<'a, A: arkPrimeField> {
+    Public(&'a [A]),
+    Private(&'a Table<A>, (usize, usize)),
+    Filler(usize),
+}
+
+#[derive(Clone, Debug)]
+pub struct NLProofInfo {
+    ipa: InnerProductArgument<E1>,
+    proj_q: Vec<N1>,
+    v_commit: Commitment<E1>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum VComp<A: arkPrimeField> {
+    ArkScalar(A),
+    NovaScalar(N1),
+    Cmt(Commitment<E1>),
+}
+
+impl<A: arkPrimeField> Add for VComp<A> {
+    type Output = VComp<A>;
+
+    fn add(self, other: VComp<A>) -> VComp<A> {
+        match (self, other) {
+            (VComp::ArkScalar(a), VComp::ArkScalar(b)) => VComp::ArkScalar(a + b),
+            (VComp::NovaScalar(a), VComp::NovaScalar(b)) => VComp::NovaScalar(a + b),
+            (VComp::Cmt(a), VComp::Cmt(b)) => VComp::Cmt(a + b),
+            _ => panic!("type mismatch"),
+        }
+    }
+}
+
+impl<A: arkPrimeField> Mul for VComp<A> {
+    type Output = VComp<A>;
+
+    fn mul(self, other: VComp<A>) -> VComp<A> {
+        match (self, other) {
+            (VComp::ArkScalar(a), VComp::ArkScalar(b)) => VComp::ArkScalar(a * b),
+            (VComp::NovaScalar(a), VComp::NovaScalar(b)) => VComp::NovaScalar(a * b),
+            (VComp::NovaScalar(a), VComp::Cmt(b)) => VComp::Cmt(b * a),
+            (VComp::Cmt(a), VComp::NovaScalar(b)) => VComp::Cmt(a * b),
+            _ => panic!("type mismatch"),
+        }
+    }
+}
+
 // A must be ark_pallas::Fr
 impl<A: arkPrimeField> Table<A> {
-    pub fn new(mut t: Vec<A>, private: bool, tag: usize) -> Self {
+    pub fn new(
+        mut t: Vec<A>,
+        private: bool,
+        tag: usize,
+        prover_gens: Option<&HyraxPC<E1>>,
+    ) -> Self {
         t.extend(vec![A::zero(); t.len().next_power_of_two() - t.len()]);
 
-        let (nova_t, priv_cmt) = if private {
+        let (nova_t, nova_t_cmt, nova_t_decmt, priv_cmt) = if private {
+            assert!(prover_gens.is_some());
+
             // convert to nova Fields
             let nova_table = t.iter().map(|a| ark_to_nova_field::<A, N1>(a)).collect();
 
             // commit using Hyrax
             let poly = MultilinearPolynomial::new(nova_table);
 
-            let num_vars = poly.get_num_vars();
-            let prover_gens: HyraxPC<E1> = HyraxPC::setup(b"poly_test", num_vars);
+            //let num_vars = poly.get_num_vars();
+            let gens = prover_gens.unwrap();
 
-            let (doc_commit, doc_decommit) = prover_gens.commit(&poly);
+            let (doc_commit, doc_decommit) = gens.commit(&poly);
 
             // using the commitment in the hash in circuit
             let mut ro: PoseidonRO<N2, N1> = PoseidonRO::new(
                 PoseidonConstantsCircuit::default(),
                 doc_commit.comm.len() * 3,
             ); // TODO?
-            for c in doc_commit.comm {
+            for c in &doc_commit.comm {
                 c.absorb_in_ro(&mut ro);
             }
             let doc_commit_for_hash: N1 = ro.squeeze(256);
 
             let ark_cmt: A = nova_to_ark_field(&doc_commit_for_hash);
-            (Some(poly), Some(ark_cmt))
+            (
+                Some(poly),
+                Some(doc_commit),
+                Some(doc_decommit),
+                Some(ark_cmt),
+            )
         } else {
-            (None, None)
+            (None, None, None, None)
         };
 
         Table {
             t,
             nova_t,
+            nova_t_cmt,
+            nova_t_decmt,
             priv_cmt,
             proj: None,
             tag,
@@ -78,7 +144,13 @@ impl<A: arkPrimeField> Table<A> {
     // you can include as many distinct ranges as you want,
     // func will automatically combine when valid
     // please do not abuse (i.e. a million len 1 ranges), func does not account for human stupidity
-    pub fn new_proj(t: Vec<A>, priv_cmt: bool, ranges: Vec<(usize, usize)>, tag: usize) -> Self {
+    pub fn new_proj(
+        t: Vec<A>,
+        priv_cmt: bool,
+        ranges: Vec<(usize, usize)>,
+        tag: usize,
+        prover_gens: Option<&HyraxPC<E1>>,
+    ) -> Self {
         let mut proj = Vec::new();
         assert!(ranges.len() >= 1);
 
@@ -101,7 +173,7 @@ impl<A: arkPrimeField> Table<A> {
                     s += chunk_len;
                 }
 
-                let mut e = s + chunk_len;
+                let e = s + chunk_len;
                 if e >= real_end {
                     start = s;
                     end = e;
@@ -175,44 +247,117 @@ impl<A: arkPrimeField> Table<A> {
             Some(proj)
         };
 
-        let mut table = Table::new(t, priv_cmt, tag);
+        let mut table = Table::new(t, priv_cmt, tag, prover_gens);
         table.proj = projection;
         table
     }
 
     // for now assume all tables public
-    fn calc_sub_v(sub_tables: Vec<Either<&[A], usize>>, q: &[A]) -> A {
+    fn calc_sub_v(
+        sub_tables: Vec<TableInfo<A>>,
+        q: &[A],
+        prover: bool,
+        gens: Option<&HyraxPC<E1>>,
+        proofs: &mut HashMap<usize, NLProofInfo>,
+    ) -> VComp<A> {
         //        println!("sub_tables {:#?}, q {:#?}", sub_tables, q);
         assert!(sub_tables.len() >= 1);
 
         if sub_tables.len() == 1 {
-            match sub_tables[0] {
-                Left(t) => {
+            match sub_tables[0].clone() {
+                TableInfo::Public(t) => {
                     if q.len() == 0 {
                         let ell = logmn(t.len());
                         let real_q = vec![A::zero(); ell];
 
-                        mle_eval(t, &real_q)
+                        let v = mle_eval(t, &real_q);
+                        if prover {
+                            VComp::ArkScalar(v)
+                        } else {
+                            VComp::NovaScalar(ark_to_nova_field::<A, N1>(&v))
+                        }
                     } else if logmn(t.len()) == q.len() {
-                        mle_eval(t, q)
+                        let v = mle_eval(t, q);
+                        if prover {
+                            VComp::ArkScalar(v)
+                        } else {
+                            VComp::NovaScalar(ark_to_nova_field::<A, N1>(&v))
+                        }
+                    } else {
+                        panic!("table length and q length mismatch");
+                    }
+                }
+                TableInfo::Private(t, (from, to)) => {
+                    if q.len() == 0 || (logmn(to - from) == q.len()) {
+                        if prover {
+                            // prover
+                            // proj chunk indx
+                            assert_eq!(t.t.len(), t.t.len().next_power_of_two());
+                            let chunk_size = to - from;
+                            assert_eq!(chunk_size, chunk_size.next_power_of_two());
+                            let num_chunks = t.t.len() / chunk_size;
+                            let num_q_idxs = logmn(num_chunks);
+
+                            let mut chunk_idx = from / chunk_size;
+                            let mut proj_q: Vec<N1> = Vec::new();
+                            for _i in 0..num_q_idxs {
+                                proj_q.push(N1::from((chunk_idx % 2) as u64));
+                                chunk_idx = chunk_idx >> 1;
+                            }
+
+                            for qi in q
+                                .iter()
+                                .rev()
+                                .map(|x| ark_to_nova_field::<A, N1>(x))
+                                .collect::<Vec<N1>>()
+                            {
+                                proj_q.push(qi);
+                            }
+                            assert_eq!(proj_q.len(), logmn(t.t.len()));
+
+                            // let v = mle_eval(&t.t, proj_q);
+                            // TODO - rm this sanity check later
+                            //assert_eq!(t.nova_t.as_ref().unwrap().evaluate(&proj_q), v);
+                            let v = t.nova_t.as_ref().unwrap().evaluate(&proj_q);
+
+                            let proof_info = t.prove_dot_prod(gens.as_ref().unwrap(), proj_q, v);
+                            proofs.insert(t.tag, proof_info);
+
+                            VComp::ArkScalar(nova_to_ark_field(&v))
+                        } else {
+                            // verifier
+
+                            let proof_info = proofs.get(&t.tag).unwrap();
+
+                            t.verify_dot_prod(gens.as_ref().unwrap(), proof_info);
+
+                            VComp::Cmt(proof_info.v_commit)
+                        }
                     } else {
                         panic!("table length and q length mismatch");
                     }
                 }
 
-                Right(u) => {
+                TableInfo::Filler(u) => {
                     // end of table
-                    A::zero()
+                    if prover {
+                        VComp::ArkScalar(A::zero())
+                    } else {
+                        VComp::NovaScalar(N1::zero())
+                    }
                 }
             }
         } else {
             let mut total_subtables_len: usize = 0;
             for e in &sub_tables {
                 match e {
-                    Left(t) => {
+                    TableInfo::Public(t) => {
                         total_subtables_len += t.len();
                     }
-                    Right(u) => {
+                    TableInfo::Private(_, (from, to)) => {
+                        total_subtables_len += to - from;
+                    }
+                    TableInfo::Filler(u) => {
                         total_subtables_len += u;
                     }
                 }
@@ -226,13 +371,17 @@ impl<A: arkPrimeField> Table<A> {
             let mut right_remaining = 0;
             while sub_len < half_len {
                 match sub_tables[i] {
-                    Left(t) => {
-                        sub_vec_left.push(Left(t));
+                    TableInfo::Public(t) => {
+                        sub_vec_left.push(sub_tables[i].clone());
                         sub_len += t.len();
                     }
-                    Right(u) => {
+                    TableInfo::Private(_, (from, to)) => {
+                        sub_vec_left.push(sub_tables[i].clone());
+                        sub_len += to - from;
+                    }
+                    TableInfo::Filler(u) => {
                         let remaining = half_len - sub_len;
-                        sub_vec_left.push(Right(remaining));
+                        sub_vec_left.push(TableInfo::Filler(remaining));
                         sub_len = half_len;
                         right_remaining = u - remaining;
                     }
@@ -246,17 +395,21 @@ impl<A: arkPrimeField> Table<A> {
 
             if right_remaining != 0 {
                 assert_eq!(sub_tables.len(), i);
-                sub_vec_right.push(Right(right_remaining));
+                sub_vec_right.push(TableInfo::Filler(right_remaining));
             } else {
                 for j in i..sub_tables.len() {
                     match sub_tables[j] {
-                        Left(t) => {
-                            sub_vec_right.push(Left(t));
+                        TableInfo::Public(t) => {
+                            sub_vec_right.push(sub_tables[j].clone());
                             sub_len += t.len();
                         }
-                        Right(u) => {
+                        TableInfo::Private(_, (from, to)) => {
+                            sub_vec_right.push(sub_tables[j].clone());
+                            sub_len += to - from;
+                        }
+                        TableInfo::Filler(u) => {
                             let remaining = half_len - sub_len;
-                            sub_vec_right.push(Right(remaining));
+                            sub_vec_right.push(TableInfo::Filler(remaining));
                             sub_len = half_len;
                         }
                     }
@@ -264,28 +417,41 @@ impl<A: arkPrimeField> Table<A> {
                 assert!(sub_len <= half_len);
             }
 
-            (A::one() - q[0]) * Self::calc_sub_v(sub_vec_left, &q[1..])
-                + q[0] * Self::calc_sub_v(sub_vec_right, &q[1..])
+            match (
+                Self::calc_sub_v(sub_vec_left, &q[1..], prover, gens, proofs),
+                Self::calc_sub_v(sub_vec_right, &q[1..], prover, gens, proofs),
+            ) {
+                (VComp::ArkScalar(l), VComp::ArkScalar(r)) => {
+                    VComp::ArkScalar((A::one() - q[0]) * l + q[0] * r)
+                }
+                (VComp::NovaScalar(l), VComp::NovaScalar(r)) => {
+                    let q0 = ark_to_nova_field::<A, N1>(&q[0]);
+                    VComp::NovaScalar((N1::one() - q0) * l + q0 * r)
+                }
+                (VComp::Cmt(l), VComp::Cmt(r)) => {
+                    let q0 = ark_to_nova_field::<A, N1>(&q[0]);
+                    VComp::Cmt(l * (N1::one() - q0) + r * q0)
+                }
+                _ => panic!("type mismatch during v calc"),
+            }
         }
     }
 
     // ordering info: (table tag, proj)
     pub(crate) fn calc_running_claim(
-        ordering_info: Vec<(usize, (usize, usize))>,
+        ordering_info: &Vec<(usize, (usize, usize))>,
         tables: Vec<&Table<A>>,
         running_q: Vec<A>,
-    ) -> A {
+        prover: bool,
+        gens: Option<&HyraxPC<E1>>,
+        proofs: &mut HashMap<usize, NLProofInfo>,
+    ) -> VComp<A> {
         //        println!("ORDERING INFO {:#?}", ordering_info);
-
-        let mut hash_tag_table = HashMap::<usize, &Table<A>>::new();
-        for t in tables {
-            hash_tag_table.insert(t.tag, t);
-        }
 
         let mut sliced_tables = Vec::new();
         let mut table_len = 0;
         for (tag, proj) in ordering_info {
-            let table = hash_tag_table[&tag];
+            let table = tables.iter().find(|&t| t.tag == *tag).unwrap();
 
             if table.proj.is_some() {
                 assert!(table.proj.as_ref().unwrap().contains(&proj));
@@ -293,36 +459,74 @@ impl<A: arkPrimeField> Table<A> {
                 assert_eq!(table.t.len(), proj.1 - proj.0);
             }
 
-            sliced_tables.push(Left(&table.t[proj.0..proj.1]));
-            table_len += (proj.1 - proj.0);
+            if table.priv_cmt.is_some() {
+                sliced_tables.push(TableInfo::Private(table, *proj));
+            } else {
+                sliced_tables.push(TableInfo::Public(&table.t[proj.0..proj.1]));
+            }
+            table_len += proj.1 - proj.0;
         }
 
         let full_table_len = table_len.next_power_of_two();
         if table_len < full_table_len {
             let filler = full_table_len - table_len;
-            sliced_tables.push(Right(filler));
+            sliced_tables.push(TableInfo::Filler(filler));
         }
 
-        Self::calc_sub_v(sliced_tables, &running_q)
+        Self::calc_sub_v(sliced_tables, &running_q, prover, gens, proofs)
     }
 
-    pub fn verify_running_claim(
-        ordering_info: Vec<(usize, (usize, usize))>,
-        tables: Vec<&Table<A>>,
-        q: &Vec<N1>,
-        v: &N1,
-    ) {
-        //assert!(self.priv_cmt.is_none());
-        //assert!(self.nova_t.is_none());
+    pub fn verify_dot_prod(&self, verifier_gens: &HyraxPC<E1>, info: &NLProofInfo) {
+        assert!(self.priv_cmt.is_some());
+        assert!(self.nova_t_cmt.is_some());
 
-        let ark_q: Vec<A> = q.iter().map(|x| nova_to_ark_field::<N1, A>(x)).collect();
-        let ark_v: A = nova_to_ark_field::<N1, A>(v);
+        let mut verifier_transcript = <E1 as Engine>::TE::new(b"dot_prod");
 
-        assert_eq!(
-            ark_v,
-            Self::calc_running_claim(ordering_info, tables, ark_q)
+        let res = verifier_gens.verify_eval(
+            &info.proj_q,
+            self.nova_t_cmt.as_ref().unwrap(),
+            &info.v_commit,
+            &info.ipa,
+            &mut verifier_transcript,
         );
+        assert!(res.is_ok());
     }
 
-    pub fn prove_private_running_claim(&self) {}
+    pub fn prove_dot_prod(
+        &self,
+        prover_gens: &HyraxPC<E1>,
+        proj_q: Vec<N1>,
+        eval: N1,
+    ) -> NLProofInfo {
+        assert!(self.priv_cmt.is_some());
+        assert!(self.nova_t.is_some());
+        assert!(self.nova_t_cmt.is_some());
+        assert!(self.nova_t_decmt.is_some());
+
+        let mut prover_transcript = <E1 as Engine>::TE::new(b"dot_prod");
+
+        let blind = N1::random(&mut OsRng);
+
+        let (ipa_proof, _ipa_witness, v_commit): (
+            InnerProductArgument<E1>,
+            InnerProductWitness<E1>,
+            _,
+        ) = prover_gens
+            .prove_eval(
+                self.nova_t.as_ref().unwrap(),
+                self.nova_t_cmt.as_ref().unwrap(),
+                self.nova_t_decmt.as_ref().unwrap(),
+                &proj_q,
+                &eval,
+                &blind,
+                &mut prover_transcript,
+            )
+            .unwrap();
+
+        NLProofInfo {
+            ipa: ipa_proof,
+            proj_q,
+            v_commit,
+        }
+    }
 }
