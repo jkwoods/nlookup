@@ -51,9 +51,10 @@ pub struct NLProofInfo {
 
 #[derive(Clone, Debug)]
 pub(crate) enum VComp<A: arkPrimeField> {
-    ArkScalar(A),
+    ArkScalar(A), // in the clear sanity
     NovaScalar(N1),
     Cmt(Commitment<E1>),
+    ProverCmt(Commitment<E1>, N1), // commit and blind
 }
 
 impl<A: arkPrimeField> Add for VComp<A> {
@@ -64,6 +65,7 @@ impl<A: arkPrimeField> Add for VComp<A> {
             (VComp::ArkScalar(a), VComp::ArkScalar(b)) => VComp::ArkScalar(a + b),
             (VComp::NovaScalar(a), VComp::NovaScalar(b)) => VComp::NovaScalar(a + b),
             (VComp::Cmt(a), VComp::Cmt(b)) => VComp::Cmt(a + b),
+            (VComp::ProverCmt(a, da), VComp::ProverCmt(b, db)) => VComp::ProverCmt(a + b, da + db),
             _ => panic!("type mismatch"),
         }
     }
@@ -78,6 +80,8 @@ impl<A: arkPrimeField> Mul for VComp<A> {
             (VComp::NovaScalar(a), VComp::NovaScalar(b)) => VComp::NovaScalar(a * b),
             (VComp::NovaScalar(a), VComp::Cmt(b)) => VComp::Cmt(b * a),
             (VComp::Cmt(a), VComp::NovaScalar(b)) => VComp::Cmt(a * b),
+            (VComp::NovaScalar(a), VComp::ProverCmt(b, db)) => VComp::ProverCmt(b * a, a * db),
+            (VComp::ProverCmt(a, da), VComp::NovaScalar(b)) => VComp::ProverCmt(a * b, da * b),
             _ => panic!("type mismatch"),
         }
     }
@@ -271,14 +275,15 @@ impl<A: arkPrimeField> Table<A> {
                         let real_q = vec![A::zero(); ell];
 
                         let v = mle_eval(t, &real_q);
-                        if prover {
+
+                        if gens.is_none() {
                             VComp::ArkScalar(v)
                         } else {
                             VComp::NovaScalar(ark_to_nova_field::<A, N1>(&v))
                         }
                     } else if logmn(t.len()) == q.len() {
                         let v = mle_eval(t, q);
-                        if prover {
+                        if gens.is_none() {
                             VComp::ArkScalar(v)
                         } else {
                             VComp::NovaScalar(ark_to_nova_field::<A, N1>(&v))
@@ -290,40 +295,54 @@ impl<A: arkPrimeField> Table<A> {
                 TableInfo::Private(t, (from, to)) => {
                     if q.len() == 0 || (logmn(to - from) == q.len()) {
                         if prover {
+                            println!(
+                                "in calc func, q {:#?}, from {:#?}, to {:#?}, table {:#?}",
+                                q.clone(),
+                                from,
+                                to,
+                                t.clone()
+                            );
+
                             // prover
                             // proj chunk indx
                             assert_eq!(t.t.len(), t.t.len().next_power_of_two());
                             let chunk_size = to - from;
                             assert_eq!(chunk_size, chunk_size.next_power_of_two());
                             let num_chunks = t.t.len() / chunk_size;
-                            let num_q_idxs = logmn(num_chunks);
+                            let num_q_idxs = if num_chunks == 1 {
+                                0
+                            } else {
+                                logmn(num_chunks)
+                            };
 
                             let mut chunk_idx = from / chunk_size;
                             let mut proj_q: Vec<N1> = Vec::new();
+
                             for _i in 0..num_q_idxs {
                                 proj_q.push(N1::from((chunk_idx % 2) as u64));
                                 chunk_idx = chunk_idx >> 1;
                             }
 
+                            proj_q = proj_q.into_iter().rev().collect();
+
                             for qi in q
                                 .iter()
-                                .rev()
                                 .map(|x| ark_to_nova_field::<A, N1>(x))
                                 .collect::<Vec<N1>>()
                             {
                                 proj_q.push(qi);
                             }
+
                             assert_eq!(proj_q.len(), logmn(t.t.len()));
 
-                            // let v = mle_eval(&t.t, proj_q);
-                            // TODO - rm this sanity check later
-                            //assert_eq!(t.nova_t.as_ref().unwrap().evaluate(&proj_q), v);
                             let v = t.nova_t.as_ref().unwrap().evaluate(&proj_q);
 
-                            let proof_info = t.prove_dot_prod(gens.as_ref().unwrap(), proj_q, v);
+                            let (proof_info, v_decommit) =
+                                t.prove_dot_prod(gens.as_ref().unwrap(), proj_q, v);
+                            let v_cmt = proof_info.v_commit.clone();
                             proofs.insert(t.tag, proof_info);
 
-                            VComp::ArkScalar(nova_to_ark_field(&v))
+                            VComp::ProverCmt(v_cmt, v_decommit)
                         } else {
                             // verifier
 
@@ -340,7 +359,7 @@ impl<A: arkPrimeField> Table<A> {
 
                 TableInfo::Filler(u) => {
                     // end of table
-                    if prover {
+                    if gens.is_none() {
                         VComp::ArkScalar(A::zero())
                     } else {
                         VComp::NovaScalar(N1::zero())
@@ -432,7 +451,25 @@ impl<A: arkPrimeField> Table<A> {
                     let q0 = ark_to_nova_field::<A, N1>(&q[0]);
                     VComp::Cmt(l * (N1::one() - q0) + r * q0)
                 }
-                _ => panic!("type mismatch during v calc"),
+                (VComp::ProverCmt(l, dl), VComp::ProverCmt(r, dr)) => {
+                    let q0 = ark_to_nova_field::<A, N1>(&q[0]);
+                    VComp::ProverCmt(
+                        l * (N1::one() - q0) + r * q0,
+                        dl * (N1::one() - q0) + dr * q0,
+                    )
+                }
+                (VComp::NovaScalar(l), VComp::Cmt(r)) => {
+                    VComp::Cmt(r) // TODO
+                                  /* let q0 = ark_to_nova_field::<A, N1>(&q[0]);
+                                                     let hyrax = gens.unwrap();
+                                                      let cmt_l = hyrax
+                                                      VComp::Cmt(l * (N1::one() - q0) + r * q0)
+                                  */
+                }
+                (VComp::Cmt(l), VComp::NovaScalar(r)) => VComp::Cmt(l),
+                (VComp::NovaScalar(l), VComp::ProverCmt(r, dr)) => VComp::ProverCmt(r, dr),
+                (VComp::ProverCmt(l, dl), VComp::NovaScalar(r)) => VComp::ProverCmt(l, dl),
+                (l, r) => panic!("type mismatch during v calc: {:#?} vs {:#?}", l, r),
             }
         }
     }
@@ -446,8 +483,6 @@ impl<A: arkPrimeField> Table<A> {
         gens: Option<&HyraxPC<E1>>,
         proofs: &mut HashMap<usize, NLProofInfo>,
     ) -> VComp<A> {
-        //        println!("ORDERING INFO {:#?}", ordering_info);
-
         let mut sliced_tables = Vec::new();
         let mut table_len = 0;
         for (tag, proj) in ordering_info {
@@ -497,7 +532,7 @@ impl<A: arkPrimeField> Table<A> {
         prover_gens: &HyraxPC<E1>,
         proj_q: Vec<N1>,
         eval: N1,
-    ) -> NLProofInfo {
+    ) -> (NLProofInfo, N1) {
         assert!(self.priv_cmt.is_some());
         assert!(self.nova_t.is_some());
         assert!(self.nova_t_cmt.is_some());
@@ -523,10 +558,13 @@ impl<A: arkPrimeField> Table<A> {
             )
             .unwrap();
 
-        NLProofInfo {
-            ipa: ipa_proof,
-            proj_q,
-            v_commit,
-        }
+        (
+            NLProofInfo {
+                ipa: ipa_proof,
+                proj_q,
+                v_commit,
+            },
+            blind,
+        )
     }
 }
