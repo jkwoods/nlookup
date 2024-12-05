@@ -537,11 +537,11 @@ impl<A: PrimeField> NLookup<A> {
         &self,
         prover_gens: &HyraxPC<E1>,
         q: &Vec<N1>,
-    ) -> (Option<A>, HashMap<usize, NLProofInfo>) {
+    ) -> HashMap<usize, NLProofInfo> {
         let ark_q: Vec<A> = q.iter().map(|x| nova_to_ark_field::<N1, A>(x)).collect();
 
         let mut proofs = HashMap::new();
-        let ark_v = Table::calc_running_claim(
+        let v = Table::calc_running_claim(
             &self.ordering_info,
             self.small_tables.iter().collect(),
             ark_q,
@@ -549,10 +549,8 @@ impl<A: PrimeField> NLookup<A> {
             Some(prover_gens),
             &mut proofs,
         );
-        match ark_v {
-            VComp::ArkScalar(a) => (Some(a), proofs),
-            _ => (None, proofs),
-        }
+
+        proofs
     }
 }
 
@@ -619,10 +617,7 @@ mod tests {
 
         // obv double conversion is bad - just for testing
         let nova_q = running_q.iter().map(|x| ark_to_nova_field(x)).collect();
-        let (v_calc, mut proofs) = nl.prove_running_claim(&gens, &nova_q);
-        if v_calc.is_some() {
-            assert_eq!(v_calc.unwrap(), running_v);
-        }
+        let mut proofs = nl.prove_running_claim(&gens, &nova_q);
         nl.verify_running_claim(&gens, &nova_q, &mut proofs);
     }
 
