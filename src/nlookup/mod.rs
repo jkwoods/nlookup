@@ -36,12 +36,12 @@ pub struct NLookupWires<A: PrimeField> {
 }
 
 #[derive(Debug)]
-pub struct NLookup<'a, A: PrimeField> {
+pub struct NLookup<A: PrimeField> {
     ell: usize, // for "big" table
     m: usize,
     pcs: PoseidonConfig<A>,
     table: Vec<A>,
-    small_table_refs: Vec<&'a Table<A>>,
+    small_tables: Vec<Table<A>>,
     priv_cmts: Vec<A>,
     tag_to_loc: HashMap<usize, Vec<(Range<usize>, isize)>>,
     padding_lookup: (usize, A),
@@ -51,9 +51,9 @@ pub struct NLookup<'a, A: PrimeField> {
 // initialize nlookup table, allowed to call circuit for multiple rounds
 // takes Tables with unique tags, the number of lookups per round
 // optionally, you can specify what "lookup" is used to pad non-full batches
-impl<'a, A: PrimeField> NLookup<'a, A> {
+impl<A: PrimeField> NLookup<A> {
     pub fn new(
-        tables: Vec<&'a Table<A>>,
+        tables: Vec<Table<A>>,
         num_lookups: usize,
         padding_lookup: Option<(usize, A)>,
     ) -> Self {
@@ -156,7 +156,7 @@ impl<'a, A: PrimeField> NLookup<'a, A> {
             m: num_lookups,
             pcs,
             table,
-            small_table_refs: tables,
+            small_tables: tables,
             priv_cmts,
             tag_to_loc,
             padding_lookup: padding,
@@ -528,7 +528,7 @@ impl<'a, A: PrimeField> NLookup<'a, A> {
         // TODO - eq proof
         Table::calc_running_claim(
             &self.ordering_info,
-            self.small_table_refs.clone(),
+            self.small_tables.iter().collect(),
             ark_q,
             false,
             Some(verifier_gens),
@@ -546,7 +546,7 @@ impl<'a, A: PrimeField> NLookup<'a, A> {
         let mut proofs = HashMap::new();
         let ark_v = Table::calc_running_claim(
             &self.ordering_info,
-            self.small_table_refs.clone(),
+            self.small_tables.iter().collect(),
             ark_q,
             true,
             Some(prover_gens),
@@ -574,7 +574,7 @@ mod tests {
     fn run_nlookup(
         batch_size: usize,
         qv: Vec<(usize, usize, usize)>,
-        tables: Vec<&Table<A>>,
+        tables: Vec<Table<A>>,
         gens: &HyraxPC<E1>,
     ) {
         let rounds = ((qv.len() as f32) / (batch_size as f32)).ceil() as usize;
@@ -638,7 +638,7 @@ mod tests {
         let lookups = vec![(2, 5, 0), (1, 3, 0), (7, 19, 0)];
 
         let gens = HyraxPC::setup(b"test", logmn(8));
-        run_nlookup(3, lookups, vec![&table], &gens);
+        run_nlookup(3, lookups, vec![table], &gens);
     }
 
     #[test]
@@ -659,10 +659,10 @@ mod tests {
         ];
 
         let gens = HyraxPC::setup(b"test", logmn(8));
-        run_nlookup(8, lookups.clone(), vec![&table], &gens);
-        run_nlookup(4, lookups.clone(), vec![&table], &gens);
-        run_nlookup(2, lookups.clone(), vec![&table], &gens);
-        run_nlookup(1, lookups.clone(), vec![&table], &gens);
+        run_nlookup(8, lookups.clone(), vec![table.clone()], &gens);
+        run_nlookup(4, lookups.clone(), vec![table.clone()], &gens);
+        run_nlookup(2, lookups.clone(), vec![table.clone()], &gens);
+        run_nlookup(1, lookups.clone(), vec![table], &gens);
     }
 
     #[test]
@@ -674,7 +674,7 @@ mod tests {
 
         let lookups = vec![(2, 5, 0), (1, 13, 0), (7, 19, 0)];
         let gens = HyraxPC::setup(b"test", logmn(8));
-        run_nlookup(3, lookups, vec![&table], &gens);
+        run_nlookup(3, lookups, vec![table], &gens);
     }
 
     #[test]
@@ -686,7 +686,7 @@ mod tests {
         let lookups = vec![(2, 5, 0), (1, 3, 0), (7, 19, 0)];
 
         let gens = HyraxPC::setup(b"test", logmn(8));
-        run_nlookup(4, lookups, vec![&table], &gens);
+        run_nlookup(4, lookups, vec![table.clone()], &gens);
 
         let big_lookups = vec![
             (2, 5, 0),
@@ -697,11 +697,11 @@ mod tests {
             (1, 3, 0),
         ];
 
-        run_nlookup(5, big_lookups, vec![&table], &gens);
+        run_nlookup(5, big_lookups, vec![table], &gens);
     }
 
     #[test]
-    fn nl_hybrid_BAD() {
+    fn nl_hybrid() {
         let t_pre = vec![2, 3, 5, 7, 9, 13, 17, 19];
         let t: Vec<A> = t_pre.into_iter().map(|x| A::from(x as u64)).collect();
         let pub_table = Table::new(t, false, 0, None);
@@ -714,7 +714,7 @@ mod tests {
         // let lookups = vec![(2, 5, 0), (1, 3, 0), (0, 23, 1), (4, 41, 1)];
         let lookups = vec![(2, 5, 0), (0, 23, 1), (4, 41, 1)];
 
-        run_nlookup(2, lookups, vec![&pub_table, &priv_table], &gens);
+        run_nlookup(2, lookups, vec![pub_table, priv_table], &gens);
     }
 
     #[test]
@@ -730,7 +730,7 @@ mod tests {
 
         let lookups = vec![(2, 5, 19), (1, 3, 19), (0, 2, 19), (0, 23, 1), (4, 41, 1)];
 
-        run_nlookup(2, lookups, vec![&pub_table, &priv_table], &gens);
+        run_nlookup(2, lookups, vec![pub_table, priv_table], &gens);
     }
 
     #[test]
@@ -747,7 +747,7 @@ mod tests {
 
         let lookups = vec![(2, 5, 0), (1, 3, 0), (0, 23, 1), (4, 41, 1)];
 
-        run_nlookup(2, lookups, vec![&pub_table, &priv_table], &gens);
+        run_nlookup(2, lookups, vec![pub_table, priv_table], &gens);
     }
 
     #[test]
@@ -764,7 +764,7 @@ mod tests {
 
         let lookups = vec![(2, 5, 0), (1, 3, 1), (0, 23, 1), (4, 41, 1)];
 
-        run_nlookup(2, lookups, vec![&pub_table, &priv_table], &gens);
+        run_nlookup(2, lookups, vec![pub_table, priv_table], &gens);
     }
 
     #[test]
@@ -818,7 +818,7 @@ mod tests {
         for (ranges, lookups) in tests {
             let table = Table::new_proj(t.clone(), false, ranges, 1, None);
 
-            run_nlookup(2, lookups, vec![&table], &gens);
+            run_nlookup(2, lookups, vec![table], &gens);
         }
     }
 
@@ -834,7 +834,7 @@ mod tests {
         let lookups = vec![(1, 23, 1), (5, 43, 1)];
 
         let gens = HyraxPC::setup(b"test", logmn(8));
-        run_nlookup(2, lookups, vec![&table], &gens);
+        run_nlookup(2, lookups, vec![table], &gens);
     }
 
     #[test]
@@ -878,7 +878,7 @@ mod tests {
             let pub_table = Table::new_proj(pub_t.clone(), false, pub_ranges, 0, None);
             let priv_table = Table::new_proj(priv_t.clone(), true, priv_ranges, 1, Some(&gens));
 
-            run_nlookup(2, lookups, vec![&pub_table, &priv_table], &gens);
+            run_nlookup(2, lookups, vec![pub_table, priv_table], &gens);
         }
     }
 
@@ -888,7 +888,7 @@ mod tests {
 
         let table = evals.clone();
         let t = Table::new(table, false, 0, None);
-        let mut nl = NLookup::new(vec![&t], 3, None);
+        let mut nl = NLookup::new(vec![t], 3, None);
 
         let qs = vec![2, 1, 1];
         let last_q = vec![A::from(5), A::from(4)];

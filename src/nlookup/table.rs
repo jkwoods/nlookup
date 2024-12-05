@@ -511,7 +511,7 @@ impl<A: arkPrimeField> Table<A> {
         Self::calc_sub_v(sliced_tables, &running_q, prover, gens, proofs)
     }
 
-    pub fn verify_dot_prod(&self, verifier_gens: &HyraxPC<E1>, info: &NLProofInfo) {
+    fn verify_dot_prod(&self, verifier_gens: &HyraxPC<E1>, info: &NLProofInfo) {
         assert!(self.priv_cmt.is_some());
         assert!(self.nova_t_cmt.is_some());
 
@@ -527,7 +527,7 @@ impl<A: arkPrimeField> Table<A> {
         assert!(res.is_ok());
     }
 
-    pub fn prove_dot_prod(
+    fn prove_dot_prod(
         &self,
         prover_gens: &HyraxPC<E1>,
         proj_q: Vec<N1>,
