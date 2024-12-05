@@ -114,7 +114,6 @@ impl<A: PrimeField> NLookup<A> {
         // TODO: make sure projections and hybrid make sense?
 
         for (st, tag, proj) in sub_tables {
-            println!("table len {:#?}, proj 0 {:#?}", table.len(), proj.0);
             let offset = (table.len() as isize) - (proj.0 as isize);
             let range = proj.0..proj.1;
             match tag_to_loc.remove(&tag) {
@@ -145,12 +144,6 @@ impl<A: PrimeField> NLookup<A> {
             (0, table[0])
         };
 
-        println!(
-            "OFFSETS {:#?}, TABLE {:#?}",
-            tag_to_loc.clone(),
-            table.clone()
-        );
-
         NLookup {
             ell,
             m: num_lookups,
@@ -172,6 +165,10 @@ impl<A: PrimeField> NLookup<A> {
 
         let running_v = self.table[0];
         (running_q, running_v)
+    }
+
+    pub fn get_sub_table(&self, tag: usize) -> Option<&Table<A>> {
+        self.small_tables.iter().find(|&t| t.tag == tag)
     }
 
     // circuit for a round of lookups
