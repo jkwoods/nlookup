@@ -76,7 +76,7 @@ fn bellpepper_lc<N: novaPrimeField, CS: ConstraintSystem<N>>(
 }
 
 #[derive(Clone, Debug)]
-struct FCircuit<N: novaPrimeField<Repr = [u8; 32]>> {
+pub struct FCircuit<N: novaPrimeField<Repr = [u8; 32]>> {
     //ark_matrices: Vec<ConstraintMatrices<F>>,
     lcs: Vec<(Vec<(N, usize)>, Vec<(N, usize)>, Vec<(N, usize)>)>,
     wit_assignments: Vec<N>,
