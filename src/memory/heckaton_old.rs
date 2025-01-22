@@ -494,7 +494,9 @@ mod tests {
                 if i == 0 {
                     num_cs = cs.num_constraints();
                     println!("num cs {:#?}", num_cs);
+                    println!("num withs{:#?}", cs.num_witness_variables());
                 } else {
+                    println!("num withs{:#?}", cs.num_witness_variables());
                     assert_eq!(num_cs, cs.num_constraints());
                 }
             }
