@@ -117,13 +117,15 @@ impl<F: PrimeField> StackMemBuilder<F> {
     }
 
     pub fn pop(&mut self, tag: usize) -> Vec<F> {
-        let cur_sp = self.sps[tag];
+        let mut cur_sp = self.sps[tag];
         assert!(cur_sp - 1 >= self.offsets[tag]);
+
+        let cur_sp = cur_sp - 1; 
 
         let popped = self.mem_builder.read(cur_sp, true);
         self.mem_builder.mem.remove(&cur_sp);
 
-        self.sps[tag] = cur_sp - 1;
+        self.sps[tag] = cur_sp;
 
         popped
     }
@@ -136,10 +138,12 @@ impl<F: PrimeField> StackMemBuilder<F> {
         );
 
         let cur_sp = self.sps[tag];
-        assert!(cur_sp + 1 < self.sps[tag + 1]);
 
-        self.mem_builder.write(cur_sp + 1, elem.clone(), true);
+        self.mem_builder.write(cur_sp, elem.clone(), true);
 
+        if self.n_mems > 1 && tag < self.n_mems - 1{
+            assert!(cur_sp + 1 < self.sps[tag + 1]);
+        }
         self.sps[tag] = cur_sp + 1;
     }
 
@@ -303,7 +307,7 @@ impl<F: PrimeField> RunningMem<F> {
         let running_t = FpVar::new_witness(cs.clone(), || Ok(self.running_t_F))?;
         let running_a = FpVar::new_witness(cs.clone(), || Ok(self.running_a_F))?;
 
-        println!("post running t running a {:?}", cs.num_witness_variables());
+        // println!("post running t running a {:?}", cs.num_witness_variables());
 
         let ti_m1_time = FpVar::new_witness(cs.clone(), || {
             Ok(if self.i <= 0 || self.done {
@@ -313,7 +317,7 @@ impl<F: PrimeField> RunningMem<F> {
             })
         })?;
 
-        println!("post t1 m1 time {:?}", cs.num_witness_variables());
+        // println!("post t1 m1 time {:?}", cs.num_witness_variables());
 
         let (ai_m1_vals, ai_m1_rw, ai_m1_addr) = if self.i <= 0 || self.done {
             let mut vals_vec = Vec::<FpVar<F>>::new();
@@ -340,7 +344,7 @@ impl<F: PrimeField> RunningMem<F> {
                 FpVar::new_witness(cs.clone(), || Ok(self.a[self.i - 1].addr))?,
             )
         };
-        println!("post ai m1 time {:?}", cs.num_witness_variables());
+        // println!("post ai m1 time {:?}", cs.num_witness_variables());
 
         let ai_m1_sr = Boolean::new_witness(cs.clone(), || Ok(true))?;
 
@@ -391,7 +395,7 @@ impl<F: PrimeField> RunningMem<F> {
         let i = FpVar::new_witness(w.cs.clone(), || Ok(F::from(self.i as u64)))?;
         let i_not_0 = i.is_neq(&FpVar::new_constant(w.cs.clone(), F::zero())?)?;
 
-        println!("pre perm chal {:?}", w.cs.num_witness_variables());
+        // println!("pre perm chal {:?}", w.cs.num_witness_variables());
 
         // running perm
         let mut perm_chal = Vec::<FpVar<F>>::new();
@@ -400,7 +404,7 @@ impl<F: PrimeField> RunningMem<F> {
         }
         let vec_len = perm_chal.len() - 4;
 
-        println!("post perm chal {:?}", w.cs.num_witness_variables());
+        // println!("post perm chal {:?}", w.cs.num_witness_variables());
 
         // by time
         let ti_time = cond.select(
@@ -408,23 +412,23 @@ impl<F: PrimeField> RunningMem<F> {
             &w.ti_m1_time,
         )?;
 
-        println!("post time  {:?}", w.cs.num_witness_variables());
+        // println!("post time  {:?}", w.cs.num_witness_variables());
 
         let ti_addr = FpVar::new_witness(w.cs.clone(), || Ok(self.t().addr))?;
-        println!("post addr {:?}", w.cs.num_witness_variables());
+        // println!("post addr {:?}", w.cs.num_witness_variables());
 
         let ti_rw = Boolean::new_witness(w.cs.clone(), || Ok(self.t().rw))?;
-        println!("post rw {:?}", w.cs.num_witness_variables());
+        // println!("post rw {:?}", w.cs.num_witness_variables());
 
 
         let mut ti_vals = Vec::<FpVar<F>>::new();
         for j in 0..vec_len {
             ti_vals.push(FpVar::new_witness(w.cs.clone(), || Ok(self.t().vals[j]))?);
         }
-        println!("post vals  {:?}", w.cs.num_witness_variables());
+        // println!("post vals  {:?}", w.cs.num_witness_variables());
 
         let ti_sr = Boolean::new_witness(w.cs.clone(), || Ok(self.t().sr))?;
-        println!("post sr {:?}", w.cs.num_witness_variables());
+        // println!("post sr {:?}", w.cs.num_witness_variables());
 
         let mut actual_next_running_t = &w.running_t
             * (&perm_chal[0] - &ti_time)
@@ -624,6 +628,15 @@ impl<F: PrimeField> StackRunningMem<F> {
     // ex 1. for all stacks:
     // outer circuit maintains a stack pointer == t[i].addr + 1 if t[i].rw is push
     // ex 2. value constraints on t[i].vals
+    pub fn next_op(
+        &mut self,
+        w: &mut StackRunningMemWires<F>,
+        tag: usize,
+    ) -> Result<(MemElemWires<F>, MemElemWires<F>), SynthesisError> {
+        let cond_var = Boolean::<F>::new_witness(w.cs.clone(), ||Ok(true))?;
+        self.conditional_next_op(&cond_var, w, tag)
+    }
+
     pub fn conditional_next_op(
         &mut self,
         cond: &Boolean<F>,
@@ -726,7 +739,7 @@ mod tests {
                     println!("iter {}", bb);
 
                     if (i * b + bb) < time_list.len() {
-                        println!("pre next op {:?}", cs.num_witness_variables());
+                        // println!("pre next op {:?}", cs.num_witness_variables());
                         let res = rsm.next_op( &not_stack, &ram, &mut rw);
                         assert!(res.is_ok());
                         let (output_t, output_a) = res.unwrap();
@@ -755,101 +768,201 @@ mod tests {
         }
     }
 
-    // fn run_stack_mem<F: PrimeField>(time_list: Vec<MemElem<F>>, is_stack: bool, batch_size: Vec<usize>) {
-    //     let mem_pad = MemElem::<F>::new(0, 0, false, vec![0; time_list[0].vals.len()]);
-    //     let mut num_cs = 0;
+    fn run_single_stack_mem<F: PrimeField>(time_list: Vec<MemElem<F>>, batch_size: Vec<usize>) {
+        let mem_pad = MemElem::<F>::new(0, 0, false, vec![0; time_list[0].vals.len()], false);
+        let mut num_cs = 0;        
+        let mut num_wits = 0; 
 
-    //     for b in batch_size {
-    //         println!("Batch size {}", b);
-    //         // regular
-    //         let mut rsm = RunningMem::new(
-    //             time_list.clone(),
-    //             is_stack,
-    //             mem_pad.clone(),
-    //             1,
-    //             vec![F::ZERO],
-    //         );
-    //         let rounds = ((time_list.len() as f32) / (b as f32)).ceil() as usize;
+        for b in batch_size {
+            println!("Batch size {}", b);
+            // regular
+            let mut rsm = StackRunningMem::new(
+                time_list.clone(),
+                mem_pad.clone(),
+                1, 
+                vec![F::ZERO]
+            );
+            let rounds = ((time_list.len() as f32) / (b as f32)).ceil() as usize;
 
-    //         let rand = rand::thread_rng().gen_range(0..(b + 1));
-    //         for i in 0..rounds {
-    //             println!("round {}", i);
+            let rand = rand::thread_rng().gen_range(0..(b + 1));
+            for i in 0..rounds {
+                println!("round {}", i);
+                let mut layer = ConstraintLayer::default();
+                layer.mode = TracingMode::OnlyConstraints;
+                let subscriber = tracing_subscriber::Registry::default().with(layer);
+                let _guard = tracing::subscriber::set_default(subscriber);
 
-    //             let cs = ConstraintSystem::<F>::new_ref();
-    //             cs.set_optimization_goal(OptimizationGoal::Constraints);
+                let cs = ConstraintSystem::<F>::new_ref();
+                cs.set_optimization_goal(OptimizationGoal::Constraints);
 
-    //             let mut rw = rsm.begin_new_circuit(cs.clone()).unwrap();
+                let mut rw = rsm.begin_new_circuit(cs.clone()).unwrap();
 
-    //             for bb in 0..b {
-    //                 if rand == bb {
-    //                     //let res = rsm.conditional_enforce(&Boolean::FALSE, &mut rw);
-    //                     //assert!(res.is_ok());
-    //                     //println!("BLANK");
-    //                 }
+                for bb in 0..b {
+                    if rand == bb {
+                        //let res = rsm.conditional_enforce(&Boolean::FALSE, &mut rw);
+                        //assert!(res.is_ok());
+                        //println!("BLANK");
+                    }
 
-    //                 println!("iter {}", bb);
+                    println!("iter {}", bb);
 
-    //                 if (i * b + bb) < time_list.len() {
-    //                     let res = rsm.next_op(&mut rw);
-    //                     assert!(res.is_ok());
-    //                     let (output_t, output_a) = res.unwrap();
-    //                     output_t.assert_eq(&time_list[i * b + bb]);
-    //                 } else {
-    //                     let res = rsm.conditional_next_op(&Boolean::FALSE, &mut rw);
-    //                     assert!(res.is_ok());
-    //                 };
-    //             }
-    //             cs.finalize();
-    //             assert!(cs.is_satisfied().unwrap(), "Failed at iter {}", i);
+                    if (i * b + bb) < time_list.len() {
+                        let res = rsm.next_op(&mut rw,0);
+                        assert!(res.is_ok());
+                        let (output_t, output_a) = res.unwrap();
+                        output_t.assert_eq(&time_list[i * b + bb]);
+                    } else {
+                        let cond_var = Boolean::<F>::new_witness(cs.clone(), ||Ok(false)).unwrap();
+                        let res = rsm.conditional_next_op(&cond_var, &mut rw,0);
+                        assert!(res.is_ok());
+                    };
+                }
+                cs.finalize();
+                assert!(cs.is_satisfied().unwrap(), "Failed at {:?}",cs.which_is_unsatisfied());
 
-    //             if i == 0 {
-    //                 num_cs = cs.num_constraints();
-    //                 println!("num cs {:#?}", num_cs);
-    //             } else {
-    //                 assert_eq!(num_cs, cs.num_constraints());
-    //             }
-    //         }
-    //         // final checks
-    //         assert_eq!(rsm.running_t_F, rsm.running_a_F);
-    //     }
-    // }
+                if i == 0 {
+                    num_cs = cs.num_constraints();
+                    println!("num cs {:#?}", num_cs);
+                    num_wits = cs.num_witness_variables();
+                    println!("num wits {:#?}", num_wits);
+                } else {
+                    assert_eq!(num_cs, cs.num_constraints());
+                    assert_eq!(num_wits, cs.num_witness_variables());
+                }
+            }
+            // final checks
+            assert_eq!(rsm.running_mem.running_t_F, rsm.running_mem.running_a_F);
+        }
+    }
 
-    // #[test]
-    // fn stack_ex() {
-    //     let time_list = vec![
-    //         MemElem::<F>::new_single(0, 0, true, 1),
-    //         MemElem::<F>::new_single(1, 1, true, 2),
-    //         MemElem::<F>::new_single(2, 1, false, 2),
-    //         MemElem::<F>::new_single(3, 0, false, 1),
-    //         MemElem::<F>::new_single(4, 0, true, 3),
-    //     ];
+    fn run_multi_stack_mem<F: PrimeField>(time_list: Vec<MemElem<F>>, stack_tag_order: Vec<usize>, batch_size: Vec<usize>) {
+        let mem_pad = MemElem::<F>::new(0, 0, false, vec![0; time_list[0].vals.len()], false);
+        let mut num_cs = 0;        
+        let mut num_wits = 0; 
 
-    //     run_mem(time_list.clone(), true, vec![1, 2, 5]);
+        for b in batch_size {
+            println!("Batch size {}", b);
+            // regular
+            let mut rsm = StackRunningMem::new(
+                time_list.clone(),
+                mem_pad.clone(),
+                1, 
+                vec![F::ZERO]
+            );
+            let rounds = ((time_list.len() as f32) / (b as f32)).ceil() as usize;
 
-    //     let mut mb = MemBuilder::new(1, true);
-    //     mb.push(vec![F::from(1)]);
-    //     mb.push(vec![F::from(2)]);
-    //     assert_eq!(vec![F::from(2)], mb.pop());
-    //     assert_eq!(vec![F::from(1)], mb.pop());
-    //     mb.push(vec![F::from(3)]);
+            let rand = rand::thread_rng().gen_range(0..(b + 1));
+            for i in 0..rounds {
+                println!("round {}", i);
+                let mut layer = ConstraintLayer::default();
+                layer.mode = TracingMode::OnlyConstraints;
+                let subscriber = tracing_subscriber::Registry::default().with(layer);
+                let _guard = tracing::subscriber::set_default(subscriber);
 
-    //     let t = mb.get_time_list();
-    //     assert_eq!(time_list, t);
-    // }
+                let cs = ConstraintSystem::<F>::new_ref();
+                cs.set_optimization_goal(OptimizationGoal::Constraints);
 
-    // #[test]
-    // #[should_panic]
-    // fn bad_pop() {
-    //     let time_list = vec![
-    //         MemElem::<F>::new_single(0, 0, true, 1),
-    //         MemElem::<F>::new_single(1, 1, true, 3),
-    //         MemElem::<F>::new_single(2, 1, false, 2),
-    //         MemElem::<F>::new_single(3, 0, false, 1),
-    //         MemElem::<F>::new_single(4, 0, true, 3),
-    //     ];
+                let mut rw = rsm.begin_new_circuit(cs.clone()).unwrap();
 
-    //     run_mem(time_list, true, vec![1, 2, 5]);
-    // }
+                for bb in 0..b {
+                    if rand == bb {
+                        //let res = rsm.conditional_enforce(&Boolean::FALSE, &mut rw);
+                        //assert!(res.is_ok());
+                        //println!("BLANK");
+                    }
+
+                    println!("iter {}", bb);
+
+                    if (i * b + bb) < time_list.len() {
+                        let res = rsm.next_op(&mut rw,stack_tag_order[i*b+bb]);
+                        assert!(res.is_ok());
+                        let (output_t, output_a) = res.unwrap();
+                        output_t.assert_eq(&time_list[i * b + bb]);
+                    } else {
+                        let cond_var = Boolean::<F>::new_witness(cs.clone(), ||Ok(false)).unwrap();
+                        let res = rsm.conditional_next_op(&cond_var, &mut rw,stack_tag_order[0]);
+                        assert!(res.is_ok());
+                    };
+                }
+                cs.finalize();
+                assert!(cs.is_satisfied().unwrap(), "Failed at {:?}",cs.which_is_unsatisfied());
+
+                if i == 0 {
+                    num_cs = cs.num_constraints();
+                    println!("num cs {:#?}", num_cs);
+                    num_wits = cs.num_witness_variables();
+                    println!("num wits {:#?}", num_wits);
+                } else {
+                    assert_eq!(num_cs, cs.num_constraints());
+                    assert_eq!(num_wits, cs.num_witness_variables());
+                }
+            }
+            // final checks
+            assert_eq!(rsm.running_mem.running_t_F, rsm.running_mem.running_a_F);
+        }
+    }
+
+    #[test]
+    fn stack_ex() {
+        let time_list = vec![
+            MemElem::<F>::new_single(0, 0, true, 1, true ),
+            MemElem::<F>::new_single(1, 1, true, 2, true ),
+            MemElem::<F>::new_single(2, 1, false, 2, true ),
+            MemElem::<F>::new_single(3, 0, false, 1, true ),
+            MemElem::<F>::new_single(4, 0, true, 3, true ),
+        ];
+
+        run_single_stack_mem(time_list.clone(), vec![1, 2, 5]);
+
+        let mut mb = StackMemBuilder::new(1, vec![0], 1);
+        mb.push(vec![F::from(1)],0);
+        mb.push(vec![F::from(2)],0);
+        assert_eq!(vec![F::from(2)], mb.pop(0));
+        assert_eq!(vec![F::from(1)], mb.pop(0));
+        mb.push(vec![F::from(3)],0);
+
+        let t = mb.get_time_list();
+        assert_eq!(time_list, t);
+    }
+
+    #[test]
+    fn multi_stack_ex() {
+        let offsets = vec![0,5];
+        let time_list = vec![
+            MemElem::<F>::new_single(0, 0, true, 1, true ),
+            MemElem::<F>::new_single(1, 5, true, 2, true ),
+            MemElem::<F>::new_single(2, 5, false, 2, true ),
+            MemElem::<F>::new_single(3, 1, true, 3, true ),
+            MemElem::<F>::new_single(4, 1, false, 3, true ),
+        ];
+
+        run_multi_stack_mem(time_list.clone(), vec![0,1,1,0,0],vec![1, 2, 5]);
+
+        let mut mb = StackMemBuilder::new(1, vec![0,5], 2);
+        mb.push(vec![F::from(1)],0);
+        mb.push(vec![F::from(2)],1);
+        assert_eq!(vec![F::from(2)], mb.pop(1));
+        mb.push(vec![F::from(3)],0);
+        assert_eq!(vec![F::from(3)], mb.pop(0));
+ 
+
+        let t = mb.get_time_list();
+        assert_eq!(time_list, t);
+    }
+
+    #[test]
+    #[should_panic]
+    fn bad_pop() {
+        let time_list = vec![
+            MemElem::<F>::new_single(0, 0, true, 1, true),
+            MemElem::<F>::new_single(1, 1, true, 3, true),
+            MemElem::<F>::new_single(2, 1, false, 2, true),
+            MemElem::<F>::new_single(3, 0, false, 1, true),
+            MemElem::<F>::new_single(4, 0, true, 3, true),
+        ];
+
+        run_single_stack_mem(time_list,  vec![1, 2, 5]);
+    }
 
     #[test]
     fn mem_ex() {
@@ -913,23 +1026,23 @@ mod tests {
         assert_eq!(time_list, t);
     }
 
-    // #[test]
-    // #[should_panic]
-    // fn mem_as_stack() {
-    //     let time_list = vec![
-    //         MemElem::<F>::new_single(0, 0, true, 0),
-    //         MemElem::<F>::new_single(1, 1, true, 1),
-    //         MemElem::<F>::new_single(2, 2, true, 2),
-    //         MemElem::<F>::new_single(3, 3, true, 3),
-    //         MemElem::<F>::new_single(4, 1, false, 1),
-    //         MemElem::<F>::new_single(5, 1, false, 1),
-    //         MemElem::<F>::new_single(6, 3, false, 3),
-    //         MemElem::<F>::new_single(7, 2, true, 4),
-    //         MemElem::<F>::new_single(8, 2, false, 4),
-    //     ];
+    #[test]
+    #[should_panic]
+    fn mem_as_stack() {
+        let time_list = vec![
+            MemElem::<F>::new_single(0, 0, true, 0, true),
+            MemElem::<F>::new_single(1, 1, true, 1, true),
+            MemElem::<F>::new_single(2, 2, true, 2, true),
+            MemElem::<F>::new_single(3, 3, true, 3, true),
+            MemElem::<F>::new_single(4, 1, false, 1, true),
+            MemElem::<F>::new_single(5, 1, false, 1, true),
+            MemElem::<F>::new_single(6, 3, false, 3, true),
+            MemElem::<F>::new_single(7, 2, true, 4, true),
+            MemElem::<F>::new_single(8, 2, false, 4, true),
+        ];
 
-    //     run_mem(time_list, true, vec![1, 2, 4, 8, 10]);
-    // }
+        run_single_stack_mem(time_list, vec![1, 2, 4, 8, 10]);
+    }
 
     #[test]
     #[should_panic]
@@ -949,19 +1062,19 @@ mod tests {
         run_mem_allram(time_list,  vec![1, 2, 4, 8, 10]);
     }
 
-    // #[test]
-    // fn eli_bug() {
-    //     let mut mb = MemBuilder::new(2, true);
-    //     mb.push(vec![F::from(0), F::from(0)]);
-    //     mb.push(vec![F::from(1), F::from(1)]);
-    //     mb.push(vec![F::from(2), F::from(1)]);
-    //     mb.pop();
-    //     mb.pop();
-    //     mb.pop();
-    //     mb.push(vec![F::from(0), F::from(1)]);
+    #[test]
+    fn eli_bug() {
+        let mut mb = StackMemBuilder::new(2, vec![0],1);
+        mb.push(vec![F::from(0), F::from(0)],0);
+        mb.push(vec![F::from(1), F::from(1)],0);
+        mb.push(vec![F::from(2), F::from(1)],0);
+        mb.pop(0);
+        mb.pop(0);
+        mb.pop(0);
+        mb.push(vec![F::from(0), F::from(1)],0);
 
-    //     let time_list = mb.get_time_list();
-    //     println!("time list {:#?}", time_list.clone());
-    //     run_mem(time_list, true, vec![1]);
-    // }
+        let time_list = mb.get_time_list();
+        println!("time list {:#?}", time_list.clone());
+        run_single_stack_mem(time_list, vec![1]);
+    }
 }
