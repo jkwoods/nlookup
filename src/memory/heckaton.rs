@@ -680,7 +680,7 @@ impl<F: PrimeField> StackRunningMem<F> {
 
             out_t
                 .addr
-                .conditional_enforce_not_equal(&offset, &is_not_tag)?;
+                .conditional_enforce_not_equal(&offset, &(is_not_tag & cond))?;
         }
 
         Ok((out_t, out_a))
