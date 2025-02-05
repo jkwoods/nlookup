@@ -103,6 +103,7 @@ pub struct StackMemBuilder<F: PrimeField> {
 impl<F: PrimeField> StackMemBuilder<F> {
     pub fn new(elem_len: usize, offsets: Vec<usize>, n_mems: usize) -> Self {
         assert!(elem_len > 0);
+        assert!(offsets.iter().all(|&x| x > 0));
 
         for i in 0..offsets.len() - 1 {
             assert!(offsets[i] < offsets[i + 1]);
@@ -148,7 +149,7 @@ impl<F: PrimeField> StackMemBuilder<F> {
     }
 
     pub fn get_time_list(&self) -> Vec<MemElem<F>> {
-        assert_eq!(self.mem_builder.t.len(), self.mem_builder.time);
+        assert_eq!(self.mem_builder.t.len(), self.mem_builder.time-1);
         self.mem_builder.t.clone()
     }
 }
@@ -172,7 +173,7 @@ impl<F: PrimeField> MemBuilder<F> {
             stack: Vec::<Vec<F>>::new(),
             mem: HashMap::new(),
             elem_len,
-            time: 0,
+            time: 1,
         }
     }
 
@@ -197,6 +198,7 @@ impl<F: PrimeField> MemBuilder<F> {
 
     pub fn write(&mut self, addr: usize, elem: Vec<F>, is_stack: bool) {
         assert_eq!(elem.len(), self.elem_len, "Element not correct length");
+        assert_ne!(addr, 0);
 
         self.mem.insert(addr, elem.clone());
 
@@ -206,7 +208,7 @@ impl<F: PrimeField> MemBuilder<F> {
     }
 
     pub fn get_time_list(&self) -> Vec<MemElem<F>> {
-        assert_eq!(self.t.len(), self.time);
+        assert_eq!(self.t.len(), self.time-1);
         self.t.clone()
     }
 }
@@ -905,20 +907,16 @@ mod tests {
     #[test]
     fn stack_ex() {
         let time_list = vec![
-            MemElem::<F>::new_single(0, 0, true, 1, true ),
             MemElem::<F>::new_single(1, 1, true, 2, true ),
             MemElem::<F>::new_single(2, 1, false, 2, true ),
-            MemElem::<F>::new_single(3, 0, false, 1, true ),
-            MemElem::<F>::new_single(4, 0, true, 3, true ),
+            MemElem::<F>::new_single(3, 1, true, 3, true ),
         ];
 
         run_single_stack_mem(time_list.clone(), vec![1, 2, 5]);
 
-        let mut mb = StackMemBuilder::new(1, vec![0], 1);
-        mb.push(vec![F::from(1)],0);
+        let mut mb = StackMemBuilder::new(1, vec![1], 1);
         mb.push(vec![F::from(2)],0);
         assert_eq!(vec![F::from(2)], mb.pop(0));
-        assert_eq!(vec![F::from(1)], mb.pop(0));
         mb.push(vec![F::from(3)],0);
 
         let t = mb.get_time_list();
@@ -927,19 +925,17 @@ mod tests {
 
     #[test]
     fn multi_stack_ex() {
-        let offsets = vec![0,5];
+        let offsets = vec![1,5];
         let time_list = vec![
-            MemElem::<F>::new_single(0, 0, true, 1, true ),
             MemElem::<F>::new_single(1, 5, true, 2, true ),
             MemElem::<F>::new_single(2, 5, false, 2, true ),
             MemElem::<F>::new_single(3, 1, true, 3, true ),
             MemElem::<F>::new_single(4, 1, false, 3, true ),
         ];
 
-        run_multi_stack_mem(time_list.clone(), vec![0,1,1,0,0],vec![1, 2, 5]);
+        run_multi_stack_mem(time_list.clone(), vec![1,1,0,0],vec![1, 2, 5]);
 
-        let mut mb = StackMemBuilder::new(1, vec![0,5], 2);
-        mb.push(vec![F::from(1)],0);
+        let mut mb = StackMemBuilder::new(1, vec![1,5], 2);
         mb.push(vec![F::from(2)],1);
         assert_eq!(vec![F::from(2)], mb.pop(1));
         mb.push(vec![F::from(3)],0);
@@ -967,7 +963,6 @@ mod tests {
     #[test]
     fn mem_ex() {
         let time_list = vec![
-            MemElem::<F>::new_single(0, 0, true, 0, false),
             MemElem::<F>::new_single(1, 1, true, 1, false),
             MemElem::<F>::new_single(2, 2, true, 2, false),
             MemElem::<F>::new_single(3, 3, true, 3, false),
@@ -981,7 +976,6 @@ mod tests {
         run_mem_allram(time_list.clone(), vec![1,2, 4, 8, 9, 10]);
 
         let mut mb = MemBuilder::new(1);
-        mb.write(0, vec![F::from(0)], false);
         mb.write(1, vec![F::from(1)], false);
         mb.write(2, vec![F::from(2)], false);
         mb.write(3, vec![F::from(3)], false);
@@ -998,7 +992,6 @@ mod tests {
     #[test]
     fn mem_mult() {
         let time_list = vec![
-            MemElem::<F>::new(0, 0, true, vec![0, 10], false),
             MemElem::<F>::new(1, 1, true, vec![1, 11], false),
             MemElem::<F>::new(2, 2, true, vec![2, 12], false),
             MemElem::<F>::new(3, 3, true, vec![3, 13], false),
@@ -1012,7 +1005,6 @@ mod tests {
         run_mem_allram(time_list.clone(), vec![1, 2, 4, 8, 9, 10]);
 
         let mut mb = MemBuilder::new(2);
-        mb.write(0, vec![F::from(0), F::from(10)], false);
         mb.write(1, vec![F::from(1), F::from(11)], false);
         mb.write(2, vec![F::from(2), F::from(12)], false);
         mb.write(3, vec![F::from(3), F::from(13)], false);
@@ -1064,7 +1056,7 @@ mod tests {
 
     #[test]
     fn eli_bug() {
-        let mut mb = StackMemBuilder::new(2, vec![0],1);
+        let mut mb = StackMemBuilder::new(2, vec![1],1);
         mb.push(vec![F::from(0), F::from(0)],0);
         mb.push(vec![F::from(1), F::from(1)],0);
         mb.push(vec![F::from(2), F::from(1)],0);
