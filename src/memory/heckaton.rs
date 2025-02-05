@@ -393,6 +393,8 @@ impl<F: PrimeField> RunningMem<F> {
             );
         }
 
+        let zero = FpVar::new_witness(w.cs.clone(), || Ok(F::ZERO))?;
+
         // i not 0
         let i = FpVar::new_witness(w.cs.clone(), || Ok(F::from(self.i as u64)))?;
         let i_not_0 = i.is_neq(&FpVar::new_constant(w.cs.clone(), F::zero())?)?;
@@ -406,18 +408,17 @@ impl<F: PrimeField> RunningMem<F> {
         }
         let vec_len = perm_chal.len() - 4;
 
-        // println!("post perm chal {:?}", w.cs.num_witness_variables());
-
         // by time
         let ti_time = cond.select(
             &FpVar::new_witness(w.cs.clone(), || Ok(self.t().time))?,
             &w.ti_m1_time,
         )?;
 
-        // println!("post time  {:?}", w.cs.num_witness_variables());
+        //assert t not 0 
+        ti_time.conditional_enforce_not_equal(&zero, cond)?;
 
         let ti_addr = FpVar::new_witness(w.cs.clone(), || Ok(self.t().addr))?;
-        // println!("post addr {:?}", w.cs.num_witness_variables());
+        ti_addr.conditional_enforce_not_equal(&zero, cond)?;
 
         let ti_rw = Boolean::new_witness(w.cs.clone(), || Ok(self.t().rw))?;
         // println!("post rw {:?}", w.cs.num_witness_variables());
@@ -447,10 +448,14 @@ impl<F: PrimeField> RunningMem<F> {
 
         // by addr
         let ai_time = FpVar::new_witness(w.cs.clone(), || Ok(self.a().time))?;
+        ai_time.conditional_enforce_not_equal(&zero, cond)?;
+
         let ai_addr = cond.select(
             &FpVar::new_witness(w.cs.clone(), || Ok(self.a().addr))?,
             &w.ai_m1_addr,
         )?;
+        ai_addr.conditional_enforce_not_equal(&zero, cond)?;
+
         let ai_rw = cond.select(
             &Boolean::new_witness(w.cs.clone(), || Ok(self.a().rw))?,
             &w.ai_m1_rw,
