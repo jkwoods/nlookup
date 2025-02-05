@@ -213,6 +213,7 @@ mod tests {
     use crate::nlookup::*;
     use ark_ff::{BigInt, One, Zero};
     use ark_r1cs_std::eq::EqGadget;
+    use ark_r1cs_std::R1CSVar;
     use ark_relations::{
         lc,
         r1cs::{ConstraintSystem, OptimizationGoal, Variable},
@@ -547,5 +548,126 @@ mod tests {
         assert!(res.is_ok());
 
         return zn_primary;
+    }
+
+
+    fn make_circuit_2(z_in: &Vec<AF>, i: usize) -> FCircuit<<NG as Group>::Scalar> {
+        let cs = ConstraintSystem::<AF>::new_ref();
+
+        let i_wit = FpVar::new_witness(cs.clone(), ||Ok(AF::from(i as u32))).unwrap();
+        let a_val = z_in[0].clone();
+        let b_val = z_in[1].clone();
+
+        let (a_in, a_out) =
+            FpVar::new_input_output_pair(cs.clone(), || Ok(a_val), || Ok(a_val + i_wit.value().unwrap())).unwrap();
+        let (b_in, b_out) =
+            FpVar::new_input_output_pair(cs.clone(), || Ok(b_val), || Ok((b_val + a_val) + i_wit.value().unwrap()))
+                .unwrap();
+
+        // a_in + i = a_out
+        a_out.enforce_equal(&(a_in.clone() + &i_wit)).unwrap();
+
+        // (b_in + a_in) + i = b_out
+        b_out.enforce_equal(&((b_in + a_in) + &i_wit)).unwrap();
+
+        FCircuit::new(cs)
+    }
+
+    pub fn run_prover(zi_list: Vec<Vec<AF>>,
+        num_steps: usize,) -> Vec<<NG as Group>::Scalar> {
+        //Round Zero to set up primary params
+    
+        let mut circuit_primary =
+            make_circuit_2(&zi_list[0],0);
+    
+        let z0_primary = circuit_primary.get_zi().clone();
+        assert_eq!(
+                z0_primary,
+                zi_list[0]
+                    .iter()
+                    .map(|f| ark_to_nova_field::<AF, <NG as Group>::Scalar>(f))
+                    .collect::<Vec<<NG as Group>::Scalar>>()
+        );
+    
+        let circuit_secondary = TrivialCircuit::default();
+    
+        // produce public parameters
+        let pp = PublicParams::<
+            E1,
+            E2,
+            FCircuit<<E1 as Engine>::Scalar>,
+            TrivialCircuit<<E2 as Engine>::Scalar>,
+        >::setup(
+            &circuit_primary,
+            &circuit_secondary,
+            &*default_ck_hint(),
+            &*default_ck_hint(),
+        )
+        .unwrap();
+    
+        // produce a recursive SNARK
+        let mut recursive_snark = RecursiveSNARK::<
+            E1,
+            E2,
+            FCircuit<<E1 as Engine>::Scalar>,
+            TrivialCircuit<<E2 as Engine>::Scalar>,
+        >::new(
+            &pp,
+            &circuit_primary,
+            &circuit_secondary,
+            &z0_primary,
+            &[<E2 as Engine>::Scalar::zero()],
+        )
+        .unwrap();
+    
+        //Actually prove things now
+        for i in 1..num_steps {
+            println!("round {:?}", i);
+            circuit_primary = make_circuit_2(&zi_list[i],i);
+            let res = recursive_snark.prove_step(&pp, &circuit_primary, &circuit_secondary);
+            assert!(res.is_ok()," res {:?}", res);
+    
+            let v_res =
+                recursive_snark.verify(&pp, i, &z0_primary, &[<E2 as Engine>::Scalar::zero()]);
+            assert!(v_res.is_ok(), "v_res {:?}", v_res);
+        }
+
+        let v_res =
+        recursive_snark.verify(&pp, num_steps, &z0_primary, &[<E2 as Engine>::Scalar::zero()]);
+
+        let (zn_primary, zn_secondary) = v_res.unwrap();
+        assert_eq!(
+            zn_primary,
+            zi_list[num_steps]
+                .iter()
+                .map(|f| ark_to_nova_field::<AF, <NG as Group>::Scalar>(f))
+                .collect::<Vec<<NG as Group>::Scalar>>()
+        );
+
+        // produce the prover and verifier keys for compressed snark
+        let (pk, vk) = CompressedSNARK::<_, _, _, _, S1, S2>::setup(&pp).unwrap();
+
+        // produce a compressed SNARK
+        let res = CompressedSNARK::<_, _, _, _, S1, S2>::prove(&pp, &pk, &recursive_snark);
+        assert!(res.is_ok());
+        let compressed_snark = res.unwrap();
+
+        // verify the compressed SNARK
+        let res =
+            compressed_snark.verify(&vk, num_steps, &z0_primary, &[<E2 as Engine>::Scalar::ZERO]);
+        assert!(res.is_ok());
+
+        return zn_primary;
+    }
+
+    #[test]
+    fn test_prover() {
+        let zi_list = vec![
+            vec![AF::one(), AF::one()], //0
+            vec![AF::one(), AF::from(2)], //1
+            vec![AF::from(2), AF::from(4)], //2
+            vec![AF::from(4), AF::from(8)],//3
+        ];
+        run_prover(zi_list, 3);
     }
 }
