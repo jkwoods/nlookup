@@ -395,6 +395,14 @@ impl<F: PrimeField> RunningMem<F> {
 
         let zero = FpVar::new_witness(w.cs.clone(), || Ok(F::ZERO))?;
 
+        //Select Padding 
+        let padding_t = FpVar::new_witness(w.cs.clone(), ||Ok(self.padding.time))?;
+        let padding_a = FpVar::new_witness(w.cs.clone(), ||Ok(self.padding.addr))?;
+        let padding_rw = Boolean::new_witness(w.cs.clone(), ||Ok(self.padding.rw))?;
+        let padding_sr = Boolean::new_witness(w.cs.clone(), ||Ok(self.padding.sr))?;
+        let padding_vals: Vec<FpVar<F>> = self.padding.vals.iter().map(|x| FpVar::new_witness(w.cs.clone(), ||Ok(x)).unwrap()).collect();
+
+
         // i not 0
         let i = FpVar::new_witness(w.cs.clone(), || Ok(F::from(self.i as u64)))?;
         let i_not_0 = i.is_neq(&FpVar::new_constant(w.cs.clone(), F::zero())?)?;
@@ -411,26 +419,26 @@ impl<F: PrimeField> RunningMem<F> {
         // by time
         let ti_time = cond.select(
             &FpVar::new_witness(w.cs.clone(), || Ok(self.t().time))?,
-            &w.ti_m1_time,
+            &padding_t,
         )?;
 
         //assert t not 0 
         ti_time.conditional_enforce_not_equal(&zero, cond)?;
 
-        let ti_addr = FpVar::new_witness(w.cs.clone(), || Ok(self.t().addr))?;
+        let ti_addr = cond.select(&FpVar::new_witness(w.cs.clone(), || Ok(self.t().addr))?, &padding_a)?;
         ti_addr.conditional_enforce_not_equal(&zero, cond)?;
 
-        let ti_rw = Boolean::new_witness(w.cs.clone(), || Ok(self.t().rw))?;
+        let ti_rw = cond.select(&Boolean::new_witness(w.cs.clone(), || Ok(self.t().rw))?, &padding_rw)?;
         // println!("post rw {:?}", w.cs.num_witness_variables());
 
 
         let mut ti_vals = Vec::<FpVar<F>>::new();
         for j in 0..vec_len {
-            ti_vals.push(FpVar::new_witness(w.cs.clone(), || Ok(self.t().vals[j]))?);
+            ti_vals.push(cond.select(&FpVar::new_witness(w.cs.clone(), || Ok(self.t().vals[j]))?, &padding_vals[j])?);
         }
         // println!("post vals  {:?}", w.cs.num_witness_variables());
 
-        let ti_sr = Boolean::new_witness(w.cs.clone(), || Ok(self.t().sr))?;
+        let ti_sr = cond.select(&Boolean::new_witness(w.cs.clone(), || Ok(self.t().sr))?, &padding_sr)?;
         // println!("post sr {:?}", w.cs.num_witness_variables());
 
         let mut actual_next_running_t = &w.running_t
@@ -447,27 +455,27 @@ impl<F: PrimeField> RunningMem<F> {
         ti_time.conditional_enforce_equal(&(&w.ti_m1_time + &FpVar::one()), &(&i_not_0 & cond))?;
 
         // by addr
-        let ai_time = FpVar::new_witness(w.cs.clone(), || Ok(self.a().time))?;
+        let ai_time = cond.select(&FpVar::new_witness(w.cs.clone(), || Ok(self.a().time))?, &padding_t)?;
         ai_time.conditional_enforce_not_equal(&zero, cond)?;
 
         let ai_addr = cond.select(
             &FpVar::new_witness(w.cs.clone(), || Ok(self.a().addr))?,
-            &w.ai_m1_addr,
+            &padding_a,
         )?;
         ai_addr.conditional_enforce_not_equal(&zero, cond)?;
 
         let ai_rw = cond.select(
             &Boolean::new_witness(w.cs.clone(), || Ok(self.a().rw))?,
-            &w.ai_m1_rw,
+            &padding_rw,
         )?;
         let mut ai_vals = Vec::<FpVar<F>>::new();
         for j in 0..vec_len {
             ai_vals.push(cond.select(
                 &FpVar::new_witness(w.cs.clone(), || Ok(self.a().vals[j]))?,
-                &w.ai_m1_vals[j],
+                &padding_vals[j],
             )?);
         }
-        let ai_sr = Boolean::new_witness(w.cs.clone(), || Ok(self.a().sr))?;
+        let ai_sr = cond.select(&Boolean::new_witness(w.cs.clone(), || Ok(self.a().sr))?, &padding_sr)?;
 
         let mut actual_next_running_a = &w.running_a
             * (&perm_chal[0] - &ai_time)
@@ -535,6 +543,7 @@ impl<F: PrimeField> RunningMem<F> {
         }
         w.running_t = new_running_t;
         w.ti_m1_time = ti_time.clone();
+
         let output_t = MemElemWires::new(ti_time, ti_addr, ti_rw, ti_vals, ti_sr);
 
         w.running_a = new_running_a;
@@ -542,6 +551,8 @@ impl<F: PrimeField> RunningMem<F> {
         w.ai_m1_rw = ai_rw.clone();
         w.ai_m1_addr = ai_addr.clone();
         w.ai_m1_sr = ai_sr.clone();
+
+
         let output_a = MemElemWires::new(ai_time, ai_addr, ai_rw, ai_vals, ai_sr);
 
         Ok((output_t, output_a))
