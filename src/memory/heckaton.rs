@@ -153,8 +153,7 @@ impl<F: PrimeField> StackMemBuilder<F> {
     }
 
     pub fn get_time_list(&self) -> Vec<MemElem<F>> {
-        assert_eq!(self.mem_builder.t.len(), self.mem_builder.time-1);
-        self.mem_builder.t.clone()
+        self.mem_builder.get_time_list()
     }
 }
 
@@ -166,6 +165,7 @@ pub struct MemBuilder<F: PrimeField> {
     mem: HashMap<usize, Vec<F>>,
     elem_len: usize,
     time: usize,
+    padding: usize, 
 }
 
 impl<F: PrimeField> MemBuilder<F> {
@@ -178,6 +178,7 @@ impl<F: PrimeField> MemBuilder<F> {
             mem: HashMap::new(),
             elem_len,
             time: 1,
+            padding: 0 
         }
     }
 
@@ -189,6 +190,7 @@ impl<F: PrimeField> MemBuilder<F> {
             vec![F::ZERO; self.elem_len],
             false,
         ));
+        self.padding += 1; 
     }
 
     pub fn read(&mut self, addr: usize, is_stack: bool) -> Vec<F> {
@@ -222,7 +224,7 @@ impl<F: PrimeField> MemBuilder<F> {
     }
 
     pub fn get_time_list(&self) -> Vec<MemElem<F>> {
-        assert_eq!(self.t.len(), self.time-1);
+        assert_eq!(self.t.len() - self.padding, self.time-1);
         self.t.clone()
     }
 }
