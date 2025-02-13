@@ -117,6 +117,10 @@ impl<F: PrimeField> StackMemBuilder<F> {
         }
     }
 
+    pub fn pad(&mut self) {
+        self.mem_builder.pad();
+    }
+
     pub fn pop(&mut self, tag: usize) -> Vec<F> {
         let mut cur_sp = self.sps[tag];
         assert!(cur_sp - 1 >= self.offsets[tag]);
@@ -175,6 +179,16 @@ impl<F: PrimeField> MemBuilder<F> {
             elem_len,
             time: 1,
         }
+    }
+
+    pub fn pad(&mut self) {
+        self.t.push(MemElem::new_f(
+            0,
+            0,
+            false,
+            vec![F::ZERO; self.elem_len],
+            false,
+        ));
     }
 
     pub fn read(&mut self, addr: usize, is_stack: bool) -> Vec<F> {
@@ -253,9 +267,11 @@ impl<F: PrimeField> RunningMem<F> {
         assert!(vec_len > 0);
         assert_eq!(padding.vals.len(), vec_len);
 
-        t.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap());
+        let mut no_pad_t: Vec<MemElem<F>> = t.iter().filter(|&x| x.time!=F::ZERO && x.addr != F::ZERO).cloned().collect();
 
-        let mut a = t.clone();
+        no_pad_t.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap());
+
+        let mut a = no_pad_t.clone();
         a.sort_by(|a, b| a.addr.partial_cmp(&b.addr).unwrap());
 
         // println!("A list {:#?}", a.clone());
@@ -267,7 +283,7 @@ impl<F: PrimeField> RunningMem<F> {
         }
 
         Self {
-            t,
+            t: no_pad_t,
             a,
             i: 0,
             has_stack: has_stack,
@@ -419,26 +435,26 @@ impl<F: PrimeField> RunningMem<F> {
         // by time
         let ti_time = cond.select(
             &FpVar::new_witness(w.cs.clone(), || Ok(self.t().time))?,
-            &padding_t,
+            &w.ti_m1_time,
         )?;
 
         //assert t not 0 
         ti_time.conditional_enforce_not_equal(&zero, cond)?;
 
-        let ti_addr = cond.select(&FpVar::new_witness(w.cs.clone(), || Ok(self.t().addr))?, &padding_a)?;
+        let ti_addr = FpVar::new_witness(w.cs.clone(), || Ok(self.t().addr))?;
         ti_addr.conditional_enforce_not_equal(&zero, cond)?;
 
-        let ti_rw = cond.select(&Boolean::new_witness(w.cs.clone(), || Ok(self.t().rw))?, &padding_rw)?;
+        let ti_rw = Boolean::new_witness(w.cs.clone(), || Ok(self.t().rw))?;
         // println!("post rw {:?}", w.cs.num_witness_variables());
 
 
         let mut ti_vals = Vec::<FpVar<F>>::new();
         for j in 0..vec_len {
-            ti_vals.push(cond.select(&FpVar::new_witness(w.cs.clone(), || Ok(self.t().vals[j]))?, &padding_vals[j])?);
+            ti_vals.push(FpVar::new_witness(w.cs.clone(), || Ok(self.t().vals[j]))?);
         }
         // println!("post vals  {:?}", w.cs.num_witness_variables());
 
-        let ti_sr = cond.select(&Boolean::new_witness(w.cs.clone(), || Ok(self.t().sr))?, &padding_sr)?;
+        let ti_sr = Boolean::new_witness(w.cs.clone(), || Ok(self.t().sr))?;
         // println!("post sr {:?}", w.cs.num_witness_variables());
 
         let mut actual_next_running_t = &w.running_t
@@ -455,27 +471,27 @@ impl<F: PrimeField> RunningMem<F> {
         ti_time.conditional_enforce_equal(&(&w.ti_m1_time + &FpVar::one()), &(&i_not_0 & cond))?;
 
         // by addr
-        let ai_time = cond.select(&FpVar::new_witness(w.cs.clone(), || Ok(self.a().time))?, &padding_t)?;
+        let ai_time = FpVar::new_witness(w.cs.clone(), || Ok(self.a().time))?;
         ai_time.conditional_enforce_not_equal(&zero, cond)?;
 
         let ai_addr = cond.select(
             &FpVar::new_witness(w.cs.clone(), || Ok(self.a().addr))?,
-            &padding_a,
+            &w.ai_m1_addr,
         )?;
         ai_addr.conditional_enforce_not_equal(&zero, cond)?;
 
         let ai_rw = cond.select(
             &Boolean::new_witness(w.cs.clone(), || Ok(self.a().rw))?,
-            &padding_rw,
+            &w.ai_m1_rw,
         )?;
         let mut ai_vals = Vec::<FpVar<F>>::new();
         for j in 0..vec_len {
             ai_vals.push(cond.select(
                 &FpVar::new_witness(w.cs.clone(), || Ok(self.a().vals[j]))?,
-                &padding_vals[j],
+                &w.ai_m1_vals[j],
             )?);
         }
-        let ai_sr = cond.select(&Boolean::new_witness(w.cs.clone(), || Ok(self.a().sr))?, &padding_sr)?;
+        let ai_sr = Boolean::new_witness(w.cs.clone(), || Ok(self.a().sr))?;
 
         let mut actual_next_running_a = &w.running_a
             * (&perm_chal[0] - &ai_time)
@@ -544,7 +560,13 @@ impl<F: PrimeField> RunningMem<F> {
         w.running_t = new_running_t;
         w.ti_m1_time = ti_time.clone();
 
-        let output_t = MemElemWires::new(ti_time, ti_addr, ti_rw, ti_vals, ti_sr);
+        let output_t = MemElemWires::new(
+            cond.select(&ti_time,&padding_t)?, 
+            cond.select(&ti_addr,&padding_a)?, 
+            cond.select(&ti_rw,&padding_rw)?, 
+            ti_vals.iter().enumerate().map(|(i,x)| cond.select(x, &padding_vals[i]).unwrap()).collect(),
+            cond.select(&ti_sr, &padding_sr)?
+        );
 
         w.running_a = new_running_a;
         w.ai_m1_vals = ai_vals.clone();
@@ -552,8 +574,13 @@ impl<F: PrimeField> RunningMem<F> {
         w.ai_m1_addr = ai_addr.clone();
         w.ai_m1_sr = ai_sr.clone();
 
-
-        let output_a = MemElemWires::new(ai_time, ai_addr, ai_rw, ai_vals, ai_sr);
+        let output_a = MemElemWires::new(
+            cond.select(&ai_time,&padding_t)?, 
+            cond.select(&ai_addr,&padding_a)?, 
+            cond.select(&ai_rw,&padding_rw)?, 
+            ai_vals.iter().enumerate().map(|(i,x)| cond.select(x, &padding_vals[i]).unwrap()).collect(),
+            cond.select(&ai_sr, &padding_sr)?
+        );
 
         Ok((output_t, output_a))
     }
