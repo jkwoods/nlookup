@@ -52,6 +52,8 @@ impl<F: PrimeField> MemElem<F> {
             sr,
         }
     }
+
+    
 }
 
 #[derive(Clone, Debug)]

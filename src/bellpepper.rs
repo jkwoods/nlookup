@@ -179,10 +179,10 @@ impl<N: novaPrimeField<Repr = [u8; 32]>> StepCircuit<N> for FCircuit<N> {
     ) -> Result<Vec<AllocatedNum<N>>, bpSynthesisError> {
         // input already allocated in z
         assert_eq!(z.len(), self.input_assignments.len());
-        println!("_______________");
-        println!("{:?}", self);
+        // println!("_______________");
+        // println!("{:?}", self);
 
-        println!("z_in fc {:?}", z);
+        // println!("z_in fc {:?}", z);
 
         // alloc outputs
         let mut alloc_out = Vec::new();
@@ -247,7 +247,7 @@ impl<N: novaPrimeField<Repr = [u8; 32]>> StepCircuit<N> for FCircuit<N> {
         
         }
 
-        println!("z_out fc {:?}", alloc_out);
+        // println!("z_out fc {:?}", alloc_out);
 
         Ok(alloc_out)
     }
