@@ -263,10 +263,9 @@ impl<A: arkPrimeField> Table<A> {
         q: &[A],
         prover: bool,
         gens: Option<&HyraxPC<E1>>,
-        proofs: &mut HashMap<usize, NLProofInfo>,
+        proofs: &mut HashMap<(usize, (usize, usize)), NLProofInfo>,
         blind: Option<N1>,
     ) -> VComp<A> {
-        println!("sub_tables {:#?}, q {:#?}", sub_tables, q);
         assert!(sub_tables.len() >= 1);
 
         if sub_tables.len() == 1 {
@@ -297,14 +296,6 @@ impl<A: arkPrimeField> Table<A> {
                 TableInfo::Private(t, (from, to)) => {
                     if q.len() == 0 || (logmn(to - from) == q.len()) {
                         if prover {
-                            println!(
-                                "in calc func, q {:#?}, from {:#?}, to {:#?}, table {:#?}",
-                                q.clone(),
-                                from,
-                                to,
-                                t.clone()
-                            );
-
                             // prover
                             // proj chunk indx
                             assert_eq!(t.t.len(), t.t.len().next_power_of_two());
@@ -339,22 +330,16 @@ impl<A: arkPrimeField> Table<A> {
 
                             let v = t.nova_t.as_ref().unwrap().evaluate(&proj_q);
 
-                            println!("proj q = {:#?}, v = {:#?}", proj_q.clone(), v.clone());
                             let (proof_info, v_blind) =
                                 t.prove_dot_prod(gens.as_ref().unwrap(), proj_q, v, blind); // TODO
                             let v_commit = proof_info.v_commit.clone();
-                            proofs.insert(t.tag, proof_info);
+                            proofs.insert((t.tag, (from, to)), proof_info);
 
-                            println!(
-                                "COMMITING PROVER v:{:#?}, blind:{:#?}",
-                                v_commit.clone(),
-                                v_blind.clone()
-                            );
                             VComp::ProverCmt(v_commit, v_blind.clone())
                         } else {
                             // verifier
 
-                            let proof_info = proofs.get(&t.tag).unwrap();
+                            let proof_info = proofs.get(&(t.tag, (from, to))).unwrap();
 
                             t.verify_dot_prod(gens.as_ref().unwrap(), proof_info);
 
@@ -446,7 +431,7 @@ impl<A: arkPrimeField> Table<A> {
 
             let q0 = ark_to_nova_field::<A, N1>(&q[0]);
 
-            let (left_blind, right_blind) = if blind.is_some() {
+            let (left_blind, right_blind) = if blind.is_some() && prover {
                 let priv_left = sub_vec_left
                     .iter()
                     .any(|t| matches!(t, TableInfo::Private(..)));
@@ -455,7 +440,6 @@ impl<A: arkPrimeField> Table<A> {
                     .any(|t| matches!(t, TableInfo::Private(..)));
 
                 if priv_left && priv_right {
-                    println!("two private tables blinds");
                     let lb = N1::random(&mut OsRng);
                     // teMP
                     assert_eq!(
@@ -494,17 +478,11 @@ impl<A: arkPrimeField> Table<A> {
                 (VComp::NovaScalar(l), VComp::NovaScalar(r)) => {
                     VComp::NovaScalar((N1::one() - q0) * l + q0 * r)
                 }
-                (VComp::Cmt(l), VComp::Cmt(r)) => {
-                    println!("verifier cmb cmts");
-                    VComp::Cmt(l * (N1::one() - q0) + r * q0)
-                }
-                (VComp::ProverCmt(l, dl), VComp::ProverCmt(r, dr)) => {
-                    println!("two private cmts comb");
-                    VComp::ProverCmt(
-                        l * (N1::one() - q0) + r * q0,
-                        dl * (N1::one() - q0) + dr * q0,
-                    )
-                }
+                (VComp::Cmt(l), VComp::Cmt(r)) => VComp::Cmt(l * (N1::one() - q0) + r * q0),
+                (VComp::ProverCmt(l, dl), VComp::ProverCmt(r, dr)) => VComp::ProverCmt(
+                    l * (N1::one() - q0) + r * q0,
+                    dl * (N1::one() - q0) + dr * q0,
+                ),
                 // hybrid cases
                 (VComp::NovaScalar(l), VComp::Cmt(r)) => {
                     // cmt to public value
@@ -542,7 +520,7 @@ impl<A: arkPrimeField> Table<A> {
         running_q: Vec<A>,
         prover: bool,
         gens: Option<&HyraxPC<E1>>,
-        proofs: &mut HashMap<usize, NLProofInfo>,
+        proofs: &mut HashMap<(usize, (usize, usize)), NLProofInfo>,
         blind: Option<N1>,
     ) -> VComp<A> {
         let mut sliced_tables = Vec::new();

@@ -522,7 +522,7 @@ impl<A: PrimeField> NLookup<A> {
         &self,
         verifier_gens: &HyraxPC<E1>,
         q: &Vec<N1>,
-        proofs: &mut HashMap<usize, NLProofInfo>,
+        proofs: &mut HashMap<(usize, (usize, usize)), NLProofInfo>,
         v_commit: &VComp<A>,
     ) {
         let ark_q: Vec<A> = q.iter().map(|x| nova_to_ark_field::<N1, A>(x)).collect();
@@ -554,7 +554,7 @@ impl<A: PrimeField> NLookup<A> {
         prover_gens: &HyraxPC<E1>,
         q: &Vec<N1>,
         big_v_blind: N1,
-    ) -> HashMap<usize, NLProofInfo> {
+    ) -> HashMap<(usize, (usize, usize)), NLProofInfo> {
         let ark_q: Vec<A> = q.iter().map(|x| nova_to_ark_field::<N1, A>(x)).collect();
 
         let mut proofs = HashMap::new();
@@ -567,7 +567,6 @@ impl<A: PrimeField> NLookup<A> {
             &mut proofs,
             Some(big_v_blind),
         );
-        println!("PROVER V {:#?}", v);
 
         proofs
     }
@@ -594,7 +593,6 @@ mod tests {
         gens: &HyraxPC<E1>,
     ) {
         let rounds = ((qv.len() as f32) / (batch_size as f32)).ceil() as usize;
-        println!("ROUNDS {:#?}", rounds);
 
         let lookups: Vec<(usize, A, usize)> = qv
             .into_iter()
@@ -639,7 +637,6 @@ mod tests {
         // obv double conversion is bad - just for testing
         let nova_q = running_q.iter().map(|x| ark_to_nova_field(x)).collect();
         let nova_v: N1 = ark_to_nova_field(&running_v);
-        println!("V in TEST {:#?}", nova_v.clone());
 
         let blind_v = N1::random(&mut OsRng);
 

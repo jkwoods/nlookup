@@ -1,0 +1,575 @@
+
+running 3 tests
+test nlookup::tests::nl_proj_calc ... ok
+test nlookup::tests::nl_proj_bad - should panic ... ok
+test nlookup::tests::nl_proj ... FAILED
+
+failures:
+
+---- nlookup::tests::nl_proj stdout ----
+real start 0, real end 2
+found start 0, found end 2
+chunk len 1
+real start 4, real end 6
+found start 4, found end 6
+chunk len 1
+ROUNDS 2
+BIG NL TABLE [
+    41,
+    43,
+    23,
+    29,
+]
+lookups [
+    (
+        4,
+        41,
+        1,
+    ),
+    (
+        0,
+        23,
+        1,
+    ),
+]
+ell 2
+q [
+    0,
+    2,
+], v [
+    41,
+    23,
+]
+lookups [
+    (
+        5,
+        43,
+        1,
+    ),
+]
+ell 2
+q [
+    1,
+    0,
+], v [
+    43,
+    41,
+]
+V in TEST 0x1f1433509f4a61adbe526abb2a1e9d87e5bd7f235563fedb27c0738bd3c91b64
+TOP MOST LEVEL v 0x1f1433509f4a61adbe526abb2a1e9d87e5bd7f235563fedb27c0738bd3c91b64, blind 0x005f9fd78d77c55c82c01b8d080154cbc8be18110cf0ea6f0ac5c73f76391f82
+top func q [
+    9354873427868097810289108682098820392206319070632818193936037475365772505961,
+    14247555124015037868794354618753574519189635466607705739228780941832466955668,
+]
+top func proofs {}
+two private tables blinds
+top func q [
+    14247555124015037868794354618753574519189635466607705739228780941832466955668,
+]
+top func proofs {}
+in calc func, q [
+    14247555124015037868794354618753574519189635466607705739228780941832466955668,
+], from 4, to 6, table Table {
+    t: [
+        23,
+        29,
+        31,
+        37,
+        41,
+        43,
+        47,
+        53,
+    ],
+    nova_t: Some(
+        MultilinearPolynomial {
+            num_vars: 3,
+            Z: [
+                0x0000000000000000000000000000000000000000000000000000000000000017,
+                0x000000000000000000000000000000000000000000000000000000000000001d,
+                0x000000000000000000000000000000000000000000000000000000000000001f,
+                0x0000000000000000000000000000000000000000000000000000000000000025,
+                0x0000000000000000000000000000000000000000000000000000000000000029,
+                0x000000000000000000000000000000000000000000000000000000000000002b,
+                0x000000000000000000000000000000000000000000000000000000000000002f,
+                0x0000000000000000000000000000000000000000000000000000000000000035,
+            ],
+        },
+    ),
+    nova_t_cmt: Some(
+        PolyCommit {
+            comm: [
+                Commitment {
+                    comm: Ep {
+                        x: 0x0475383b7b93e3d370602dfb9ef8e514273603a14fb73f4a082cf2a6297bcc21,
+                        y: 0x113832c0a577fe42396465e6600c7771bd58b956c07c220ad55540b9330d65aa,
+                        z: 0x3f323a8fe30ae03c2e9b9fb81ecdb95485f0cc38a3c3edacc5d319b581b7b5bb,
+                    },
+                },
+                Commitment {
+                    comm: Ep {
+                        x: 0x03fbfaf7d7ac56eb59f3576fd74631fd757ecb62d99b745df9357688280abed6,
+                        y: 0x320469a93e4869f8fcfd61b553fc47feaf3ec73da8899066add6c1b3cfdc8ee3,
+                        z: 0x1d6dab420fab3760ed86f8fedc6d00dea2d9e56325bfc1a5b515a401fcd4069a,
+                    },
+                },
+            ],
+        },
+    ),
+    nova_t_decmt: Some(
+        PolyCommitBlinds {
+            blinds: [
+                0x0ce69b523f5d25f507a68ffc8e5e1690933b2bde753e81c34f6ba9d7b59fe3dc,
+                0x0499cc9a22ff4d7cfa2aa7fad93962022a54582943b91ca9f0d6731302d5bc96,
+            ],
+        },
+    ),
+    priv_cmt: Some(
+        7787338219859815831460405460494672356465137353196319468859265294087222676578,
+    ),
+    proj: Some(
+        [
+            (
+                0,
+                2,
+            ),
+            (
+                4,
+                6,
+            ),
+        ],
+    ),
+    tag: 1,
+}
+proj q = [
+    0x0000000000000000000000000000000000000000000000000000000000000001,
+    0x0000000000000000000000000000000000000000000000000000000000000000,
+    0x1f7fd496fb882d6af0c63edd6c412b62b0453770afb9f370f168c601385f7d94,
+], v = 0x3effa92df7105ad5e18c7dbad88256c5608a6ee15f73e6e1e2d18c0270befb51
+COMMITING PROVER v:0x3effa92df7105ad5e18c7dbad88256c5608a6ee15f73e6e1e2d18c0270befb51, blind:0x25ed663619e44b7cac4d66c38ecc2cd3c02efc99d41ce3ec6c8f6d7d03064d52, cmt Commitment {
+    comm: Ep {
+        x: 0x1a49bf0c11e2c81134930464ed9767542979f54d34e7f646e76cea8747d663e9,
+        y: 0x09b7ff670affee6815c360cb1875e8c21341ccd53f729c39b2cae61c4720e757,
+        z: 0x23958c9092c936929f4bdb32c7c23daa24bb38c93199e7121006d0e860893df0,
+    },
+}
+top func q [
+    14247555124015037868794354618753574519189635466607705739228780941832466955668,
+]
+top func proofs {
+    1: NLProofInfo {
+        ipa: InnerProductArgument {
+            P_L_vec: [
+                Commitment {
+                    comm: Ep {
+                        x: 0x0a8203acdb480d39476a07b5303d1be2cb5bf2d56ee9e9e17c378d3ca7f30c62,
+                        y: 0x246340d4b2e2596afc9dfd335be0d80b26908a83e4ba0d185aed28289c9cbd99,
+                        z: 0x1b3e179cc25b58c297d2910c79f52b283dbc8f963c3d698bf3ee494453791b00,
+                    },
+                },
+                Commitment {
+                    comm: Ep {
+                        x: 0x134d9115b5a291583779563252458bc929f24393a82daedc16911156a6f27116,
+                        y: 0x16a9dc3de3c360e98041e08eb37696bb18339cf6c6d517453d9e03b21e5d167d,
+                        z: 0x1b14fb29fba2215d6422fd4dc721624146fba22df2f9d8295e70d61875ebae2b,
+                    },
+                },
+            ],
+            P_R_vec: [
+                Commitment {
+                    comm: Ep {
+                        x: 0x3d9824e4c889af1438b635b711fe861566b149fd5d4be7f4f6aab31a2de28ae5,
+                        y: 0x30fb5f781bfc33b151f7f065428dee23b456d4e171b3351ce74e739ef966f469,
+                        z: 0x2425d1966313f59732d2758c0760c35c4e6f357238c8152f0a2d985a9f11fa6f,
+                    },
+                },
+                Commitment {
+                    comm: Ep {
+                        x: 0x23174355d3a43d3dc46ce3deee27485c6d3c5a59c654f3ed8ab20223d231b0cb,
+                        y: 0x2eaf9141da5e1030eb2ea241b10843a7c7431244f856dc2a7e8c5bf3321d6d50,
+                        z: 0x1cf064b97db59c8e3203ce8160b07d25ceba1680b6983df0de0f840a8e5536be,
+                    },
+                },
+            ],
+            delta: Commitment {
+                comm: Ep {
+                    x: 0x2f30034b742daedcf273df40010a220441818c5571200bb6219fc2f352f6203c,
+                    y: 0x07d57deda431532a2cb124e96c58d5fdf4733d400e16dff0f87426231d86e659,
+                    z: 0x1197b589a3bb3eb8b370c5d755e55e78fe7938a7efcd8a55476f4e1879390291,
+                },
+            },
+            beta: Commitment {
+                comm: Ep {
+                    x: 0x087577dc597d8ba20d133def6e80cb053f5cd3bd58327d9ce21be3eef99bab82,
+                    y: 0x0dc9f9c7c85b5b58e3fd1464beaeaaf3cfb809d93ac59a57385fbd0b5d5e80b2,
+                    z: 0x34275b3f2333c3ae1268a05aa5fec3e7b667fcfdab6369656eca3178abce6914,
+                },
+            },
+            z_1: 0x2ce71544e60a9da01439c0f980ccff77409d13671e9615d2c27ec222ee87cd66,
+            z_2: 0x05be922cb47d88b5e7ba3b4d1d9ec97e6e29e2ac90938424de5c3104b2195bb4,
+        },
+        proj_q: [
+            0x0000000000000000000000000000000000000000000000000000000000000001,
+            0x0000000000000000000000000000000000000000000000000000000000000000,
+            0x1f7fd496fb882d6af0c63edd6c412b62b0453770afb9f370f168c601385f7d94,
+        ],
+        v_commit: Commitment {
+            comm: Ep {
+                x: 0x1a49bf0c11e2c81134930464ed9767542979f54d34e7f646e76cea8747d663e9,
+                y: 0x09b7ff670affee6815c360cb1875e8c21341ccd53f729c39b2cae61c4720e757,
+                z: 0x23958c9092c936929f4bdb32c7c23daa24bb38c93199e7121006d0e860893df0,
+            },
+        },
+    },
+}
+in calc func, q [
+    14247555124015037868794354618753574519189635466607705739228780941832466955668,
+], from 0, to 2, table Table {
+    t: [
+        23,
+        29,
+        31,
+        37,
+        41,
+        43,
+        47,
+        53,
+    ],
+    nova_t: Some(
+        MultilinearPolynomial {
+            num_vars: 3,
+            Z: [
+                0x0000000000000000000000000000000000000000000000000000000000000017,
+                0x000000000000000000000000000000000000000000000000000000000000001d,
+                0x000000000000000000000000000000000000000000000000000000000000001f,
+                0x0000000000000000000000000000000000000000000000000000000000000025,
+                0x0000000000000000000000000000000000000000000000000000000000000029,
+                0x000000000000000000000000000000000000000000000000000000000000002b,
+                0x000000000000000000000000000000000000000000000000000000000000002f,
+                0x0000000000000000000000000000000000000000000000000000000000000035,
+            ],
+        },
+    ),
+    nova_t_cmt: Some(
+        PolyCommit {
+            comm: [
+                Commitment {
+                    comm: Ep {
+                        x: 0x0475383b7b93e3d370602dfb9ef8e514273603a14fb73f4a082cf2a6297bcc21,
+                        y: 0x113832c0a577fe42396465e6600c7771bd58b956c07c220ad55540b9330d65aa,
+                        z: 0x3f323a8fe30ae03c2e9b9fb81ecdb95485f0cc38a3c3edacc5d319b581b7b5bb,
+                    },
+                },
+                Commitment {
+                    comm: Ep {
+                        x: 0x03fbfaf7d7ac56eb59f3576fd74631fd757ecb62d99b745df9357688280abed6,
+                        y: 0x320469a93e4869f8fcfd61b553fc47feaf3ec73da8899066add6c1b3cfdc8ee3,
+                        z: 0x1d6dab420fab3760ed86f8fedc6d00dea2d9e56325bfc1a5b515a401fcd4069a,
+                    },
+                },
+            ],
+        },
+    ),
+    nova_t_decmt: Some(
+        PolyCommitBlinds {
+            blinds: [
+                0x0ce69b523f5d25f507a68ffc8e5e1690933b2bde753e81c34f6ba9d7b59fe3dc,
+                0x0499cc9a22ff4d7cfa2aa7fad93962022a54582943b91ca9f0d6731302d5bc96,
+            ],
+        },
+    ),
+    priv_cmt: Some(
+        7787338219859815831460405460494672356465137353196319468859265294087222676578,
+    ),
+    proj: Some(
+        [
+            (
+                0,
+                2,
+            ),
+            (
+                4,
+                6,
+            ),
+        ],
+    ),
+    tag: 1,
+}
+proj q = [
+    0x0000000000000000000000000000000000000000000000000000000000000000,
+    0x0000000000000000000000000000000000000000000000000000000000000000,
+    0x1f7fd496fb882d6af0c63edd6c412b62b0453770afb9f370f168c601385f7d94,
+], v = 0x3cfefb89e5311081a4a579308987044fdd121aac0b3262ea8fe6cdc5523cf18d
+COMMITING PROVER v:0x3cfefb89e5311081a4a579308987044fdd121aac0b3262ea8fe6cdc5523cf18d, blind:0x04d557cd0d6b251e6a3c0a678f450d4c5f922c5c52a03d60c9e81ff4d9aa505d, cmt Commitment {
+    comm: Ep {
+        x: 0x00d6741f9f17bc31af7eee3d37696bb3376a94cf20688620b4dccea4420c0eb8,
+        y: 0x0f5f6829cdb354714d4d2306f98755f6f19a92bf6b138305992dd1a4e065fe9e,
+        z: 0x1db77667632afff10953b9f7a3098cc8e2fef9b588aaf1f5a893986d6467e6c6,
+    },
+}
+two private cmts comb Commitment {
+    comm: Ep {
+        x: 0x1a49bf0c11e2c81134930464ed9767542979f54d34e7f646e76cea8747d663e9,
+        y: 0x09b7ff670affee6815c360cb1875e8c21341ccd53f729c39b2cae61c4720e757,
+        z: 0x23958c9092c936929f4bdb32c7c23daa24bb38c93199e7121006d0e860893df0,
+    },
+}, Commitment {
+    comm: Ep {
+        x: 0x00d6741f9f17bc31af7eee3d37696bb3376a94cf20688620b4dccea4420c0eb8,
+        y: 0x0f5f6829cdb354714d4d2306f98755f6f19a92bf6b138305992dd1a4e065fe9e,
+        z: 0x1db77667632afff10953b9f7a3098cc8e2fef9b588aaf1f5a893986d6467e6c6,
+    },
+} = Commitment {
+    comm: Ep {
+        x: 0x0469caee35f467e408c8c1a4cb49790fb0cfe6806f614c918a680c59625ca539,
+        y: 0x246c662239df37aecbe98db39b8babbe1974b12f9f35863629a014d2ac22355b,
+        z: 0x0cdae04134bdad7141e83fcd9f1ca08481281f58e276e4e64afd4093cfc94c86,
+    },
+}
+PROVER V ProverCmt(
+    Commitment {
+        comm: Ep {
+            x: 0x0469caee35f467e408c8c1a4cb49790fb0cfe6806f614c918a680c59625ca539,
+            y: 0x246c662239df37aecbe98db39b8babbe1974b12f9f35863629a014d2ac22355b,
+            z: 0x0cdae04134bdad7141e83fcd9f1ca08481281f58e276e4e64afd4093cfc94c86,
+        },
+    },
+    0x005f9fd78d77c55c82c01b8d080154cbc8be18110cf0ea6f0ac5c73f76391f82,
+)
+top func q [
+    9354873427868097810289108682098820392206319070632818193936037475365772505961,
+    14247555124015037868794354618753574519189635466607705739228780941832466955668,
+]
+top func proofs {
+    1: NLProofInfo {
+        ipa: InnerProductArgument {
+            P_L_vec: [
+                Commitment {
+                    comm: Ep {
+                        x: 0x01b2a2e3f1d0b7b7ea33c78a402d4dbb4d9b2f54e563670b3f38a11349df126e,
+                        y: 0x2f05504056c06af6cf96c8cad67b4625c16454e564059b31fdee559682d4fd95,
+                        z: 0x31cabcb64f29d6a04fc63381a6b4d2617702fe967b361eee34704f9a8bfe4872,
+                    },
+                },
+                Commitment {
+                    comm: Ep {
+                        x: 0x1143debc3443ca3a3b567a14fb2d19312143cf1f351dde4952cf5b6ee5c6567a,
+                        y: 0x0d51d1f855a45d750f020ee0c152b83ace6415bd77ddcabdc86cacdb57acfc1e,
+                        z: 0x20021b54ac61d22ac3367eac5522ae81eb28683289e6b00791dc1b01138fd7a9,
+                    },
+                },
+            ],
+            P_R_vec: [
+                Commitment {
+                    comm: Ep {
+                        x: 0x016595d734580d1f38a0796c3759925a8f216dc24bff7f34a9422663cec9bc38,
+                        y: 0x1c5190273f02b10a6b57095b5fdbc4c86d817c244cfd876b390b4ae253598587,
+                        z: 0x319f5cb47f07c0270854a10b9621c65c2455f55de20ed422516c79ed09837eb2,
+                    },
+                },
+                Commitment {
+                    comm: Ep {
+                        x: 0x3e336e1a37cb3351673514163f750c3677c65a8c8b613a2eca6562b19b159568,
+                        y: 0x22f15204c8c99aae86c6646ee6b7c87c237192689524f93068285fbaee4c36f4,
+                        z: 0x3f0b87b51c0a249fe057c7f5d3664a8d99e53f39f2225355d27f46b1ba8f98ef,
+                    },
+                },
+            ],
+            delta: Commitment {
+                comm: Ep {
+                    x: 0x29351a366d0c1c09cc1c016d645223d1f0604ddad5aee914ce3dce9b19d9d4f7,
+                    y: 0x17064dbe4f99fb90bd3f68c50d99df3efb94c1467e6f4ae370583e92afc3d95b,
+                    z: 0x14309619a63385c289c5c8ed042c2fe385e9e0aa958a00b1c6f83f9dfcd9be19,
+                },
+            },
+            beta: Commitment {
+                comm: Ep {
+                    x: 0x37f592bf677dcd3cbc85dd75e96c3e7b02a2a48facc33b842a027ddcdbe4a513,
+                    y: 0x245c6f73bab28cb5c6f469468671eb61c54d292338f1b5152e8134288549cce1,
+                    z: 0x0f997296b2ec2d8001ba8f1c648ad10aca162ff4cffaca444e9e1d8760865579,
+                },
+            },
+            z_1: 0x16872ccb97d1b99275a842d1aa754fe82ce612a614e1c47042cfcd32f56cbf5a,
+            z_2: 0x083f2feb6971b2eedabfee28c20c91f21d3760ad3d2a42854502918244799dd5,
+        },
+        proj_q: [
+            0x0000000000000000000000000000000000000000000000000000000000000000,
+            0x0000000000000000000000000000000000000000000000000000000000000000,
+            0x1f7fd496fb882d6af0c63edd6c412b62b0453770afb9f370f168c601385f7d94,
+        ],
+        v_commit: Commitment {
+            comm: Ep {
+                x: 0x00d6741f9f17bc31af7eee3d37696bb3376a94cf20688620b4dccea4420c0eb8,
+                y: 0x0f5f6829cdb354714d4d2306f98755f6f19a92bf6b138305992dd1a4e065fe9e,
+                z: 0x1db77667632afff10953b9f7a3098cc8e2fef9b588aaf1f5a893986d6467e6c6,
+            },
+        },
+    },
+}
+top func q [
+    14247555124015037868794354618753574519189635466607705739228780941832466955668,
+]
+top func proofs {
+    1: NLProofInfo {
+        ipa: InnerProductArgument {
+            P_L_vec: [
+                Commitment {
+                    comm: Ep {
+                        x: 0x01b2a2e3f1d0b7b7ea33c78a402d4dbb4d9b2f54e563670b3f38a11349df126e,
+                        y: 0x2f05504056c06af6cf96c8cad67b4625c16454e564059b31fdee559682d4fd95,
+                        z: 0x31cabcb64f29d6a04fc63381a6b4d2617702fe967b361eee34704f9a8bfe4872,
+                    },
+                },
+                Commitment {
+                    comm: Ep {
+                        x: 0x1143debc3443ca3a3b567a14fb2d19312143cf1f351dde4952cf5b6ee5c6567a,
+                        y: 0x0d51d1f855a45d750f020ee0c152b83ace6415bd77ddcabdc86cacdb57acfc1e,
+                        z: 0x20021b54ac61d22ac3367eac5522ae81eb28683289e6b00791dc1b01138fd7a9,
+                    },
+                },
+            ],
+            P_R_vec: [
+                Commitment {
+                    comm: Ep {
+                        x: 0x016595d734580d1f38a0796c3759925a8f216dc24bff7f34a9422663cec9bc38,
+                        y: 0x1c5190273f02b10a6b57095b5fdbc4c86d817c244cfd876b390b4ae253598587,
+                        z: 0x319f5cb47f07c0270854a10b9621c65c2455f55de20ed422516c79ed09837eb2,
+                    },
+                },
+                Commitment {
+                    comm: Ep {
+                        x: 0x3e336e1a37cb3351673514163f750c3677c65a8c8b613a2eca6562b19b159568,
+                        y: 0x22f15204c8c99aae86c6646ee6b7c87c237192689524f93068285fbaee4c36f4,
+                        z: 0x3f0b87b51c0a249fe057c7f5d3664a8d99e53f39f2225355d27f46b1ba8f98ef,
+                    },
+                },
+            ],
+            delta: Commitment {
+                comm: Ep {
+                    x: 0x29351a366d0c1c09cc1c016d645223d1f0604ddad5aee914ce3dce9b19d9d4f7,
+                    y: 0x17064dbe4f99fb90bd3f68c50d99df3efb94c1467e6f4ae370583e92afc3d95b,
+                    z: 0x14309619a63385c289c5c8ed042c2fe385e9e0aa958a00b1c6f83f9dfcd9be19,
+                },
+            },
+            beta: Commitment {
+                comm: Ep {
+                    x: 0x37f592bf677dcd3cbc85dd75e96c3e7b02a2a48facc33b842a027ddcdbe4a513,
+                    y: 0x245c6f73bab28cb5c6f469468671eb61c54d292338f1b5152e8134288549cce1,
+                    z: 0x0f997296b2ec2d8001ba8f1c648ad10aca162ff4cffaca444e9e1d8760865579,
+                },
+            },
+            z_1: 0x16872ccb97d1b99275a842d1aa754fe82ce612a614e1c47042cfcd32f56cbf5a,
+            z_2: 0x083f2feb6971b2eedabfee28c20c91f21d3760ad3d2a42854502918244799dd5,
+        },
+        proj_q: [
+            0x0000000000000000000000000000000000000000000000000000000000000000,
+            0x0000000000000000000000000000000000000000000000000000000000000000,
+            0x1f7fd496fb882d6af0c63edd6c412b62b0453770afb9f370f168c601385f7d94,
+        ],
+        v_commit: Commitment {
+            comm: Ep {
+                x: 0x00d6741f9f17bc31af7eee3d37696bb3376a94cf20688620b4dccea4420c0eb8,
+                y: 0x0f5f6829cdb354714d4d2306f98755f6f19a92bf6b138305992dd1a4e065fe9e,
+                z: 0x1db77667632afff10953b9f7a3098cc8e2fef9b588aaf1f5a893986d6467e6c6,
+            },
+        },
+    },
+}
+top func q [
+    14247555124015037868794354618753574519189635466607705739228780941832466955668,
+]
+top func proofs {
+    1: NLProofInfo {
+        ipa: InnerProductArgument {
+            P_L_vec: [
+                Commitment {
+                    comm: Ep {
+                        x: 0x01b2a2e3f1d0b7b7ea33c78a402d4dbb4d9b2f54e563670b3f38a11349df126e,
+                        y: 0x2f05504056c06af6cf96c8cad67b4625c16454e564059b31fdee559682d4fd95,
+                        z: 0x31cabcb64f29d6a04fc63381a6b4d2617702fe967b361eee34704f9a8bfe4872,
+                    },
+                },
+                Commitment {
+                    comm: Ep {
+                        x: 0x1143debc3443ca3a3b567a14fb2d19312143cf1f351dde4952cf5b6ee5c6567a,
+                        y: 0x0d51d1f855a45d750f020ee0c152b83ace6415bd77ddcabdc86cacdb57acfc1e,
+                        z: 0x20021b54ac61d22ac3367eac5522ae81eb28683289e6b00791dc1b01138fd7a9,
+                    },
+                },
+            ],
+            P_R_vec: [
+                Commitment {
+                    comm: Ep {
+                        x: 0x016595d734580d1f38a0796c3759925a8f216dc24bff7f34a9422663cec9bc38,
+                        y: 0x1c5190273f02b10a6b57095b5fdbc4c86d817c244cfd876b390b4ae253598587,
+                        z: 0x319f5cb47f07c0270854a10b9621c65c2455f55de20ed422516c79ed09837eb2,
+                    },
+                },
+                Commitment {
+                    comm: Ep {
+                        x: 0x3e336e1a37cb3351673514163f750c3677c65a8c8b613a2eca6562b19b159568,
+                        y: 0x22f15204c8c99aae86c6646ee6b7c87c237192689524f93068285fbaee4c36f4,
+                        z: 0x3f0b87b51c0a249fe057c7f5d3664a8d99e53f39f2225355d27f46b1ba8f98ef,
+                    },
+                },
+            ],
+            delta: Commitment {
+                comm: Ep {
+                    x: 0x29351a366d0c1c09cc1c016d645223d1f0604ddad5aee914ce3dce9b19d9d4f7,
+                    y: 0x17064dbe4f99fb90bd3f68c50d99df3efb94c1467e6f4ae370583e92afc3d95b,
+                    z: 0x14309619a63385c289c5c8ed042c2fe385e9e0aa958a00b1c6f83f9dfcd9be19,
+                },
+            },
+            beta: Commitment {
+                comm: Ep {
+                    x: 0x37f592bf677dcd3cbc85dd75e96c3e7b02a2a48facc33b842a027ddcdbe4a513,
+                    y: 0x245c6f73bab28cb5c6f469468671eb61c54d292338f1b5152e8134288549cce1,
+                    z: 0x0f997296b2ec2d8001ba8f1c648ad10aca162ff4cffaca444e9e1d8760865579,
+                },
+            },
+            z_1: 0x16872ccb97d1b99275a842d1aa754fe82ce612a614e1c47042cfcd32f56cbf5a,
+            z_2: 0x083f2feb6971b2eedabfee28c20c91f21d3760ad3d2a42854502918244799dd5,
+        },
+        proj_q: [
+            0x0000000000000000000000000000000000000000000000000000000000000000,
+            0x0000000000000000000000000000000000000000000000000000000000000000,
+            0x1f7fd496fb882d6af0c63edd6c412b62b0453770afb9f370f168c601385f7d94,
+        ],
+        v_commit: Commitment {
+            comm: Ep {
+                x: 0x00d6741f9f17bc31af7eee3d37696bb3376a94cf20688620b4dccea4420c0eb8,
+                y: 0x0f5f6829cdb354714d4d2306f98755f6f19a92bf6b138305992dd1a4e065fe9e,
+                z: 0x1db77667632afff10953b9f7a3098cc8e2fef9b588aaf1f5a893986d6467e6c6,
+            },
+        },
+    },
+}
+verifier cmb cmts Commitment {
+    comm: Ep {
+        x: 0x00d6741f9f17bc31af7eee3d37696bb3376a94cf20688620b4dccea4420c0eb8,
+        y: 0x0f5f6829cdb354714d4d2306f98755f6f19a92bf6b138305992dd1a4e065fe9e,
+        z: 0x1db77667632afff10953b9f7a3098cc8e2fef9b588aaf1f5a893986d6467e6c6,
+    },
+}, Commitment {
+    comm: Ep {
+        x: 0x00d6741f9f17bc31af7eee3d37696bb3376a94cf20688620b4dccea4420c0eb8,
+        y: 0x0f5f6829cdb354714d4d2306f98755f6f19a92bf6b138305992dd1a4e065fe9e,
+        z: 0x1db77667632afff10953b9f7a3098cc8e2fef9b588aaf1f5a893986d6467e6c6,
+    },
+} = Commitment {
+    comm: Ep {
+        x: 0x1615b71bdbeaaf05be9bb11c14d202771d58d3dc2b259004c023ee12883e89ce,
+        y: 0x28472623b07b7043b610a989d29a31083ec387f98526ea065261648533aa05c1,
+        z: 0x153d0c7f9a7ebd4c53cdbdd81e310e0c095f0c69f828873638276d6a8d235f86,
+    },
+}
+thread 'nlookup::tests::nl_proj' panicked at src/nlookup/mod.rs:542:17:
+assertion `left == right` failed
+  left: Commitment { comm: Ep { x: 0x1615b71bdbeaaf05be9bb11c14d202771d58d3dc2b259004c023ee12883e89ce, y: 0x28472623b07b7043b610a989d29a31083ec387f98526ea065261648533aa05c1, z: 0x153d0c7f9a7ebd4c53cdbdd81e310e0c095f0c69f828873638276d6a8d235f86 } }
+ right: Commitment { comm: Ep { x: 0x3bae67d33cf71db31f36a519e0149c9e7c2dc9592e49cbb327404d98863ed0ab, y: 0x17e6ba2c753d0edb8ac2ebf45c05692d5e5b90a6010f37a4b918ac5a6f9df357, z: 0x35a52f9d858c97311ec8f199691f21f509176af9a2e69e115889d9e64ca83c56 } }
+
+
+failures:
+    nlookup::tests::nl_proj
+
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 26 filtered out; finished in 0.23s
+
