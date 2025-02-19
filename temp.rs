@@ -12,9 +12,7 @@ use nova_snark::{
         zk_ipa_pc::{InnerProductArgument, InnerProductWitness},
     },
     spartan::polys::multilinear::MultilinearPolynomial,
-    traits::{
-        commitment::CommitmentEngineTrait, AbsorbInROTrait, Engine, ROTrait, TranscriptEngineTrait,
-    },
+    traits::{AbsorbInROTrait, Engine, ROTrait, TranscriptEngineTrait},
 };
 use rand::rngs::OsRng;
 use std::collections::HashMap;
@@ -32,6 +30,9 @@ pub struct Table<A: arkPrimeField> {
     nova_t: Option<MultilinearPolynomial<N1>>,
     nova_t_cmt: Option<PolyCommit<E1>>,
     nova_t_decmt: Option<PolyCommitBlinds<E1>>,
+    nova_v: Option<N1>,
+    nova_v_cmt: Option<Commitment<E1>>,
+    nova_v_decmt: Option<N1>,
     pub priv_cmt: Option<A>, // T pub or priv?
     pub proj: Option<Vec<(usize, usize)>>,
     pub tag: usize,
@@ -139,6 +140,9 @@ impl<A: arkPrimeField> Table<A> {
             nova_t,
             nova_t_cmt,
             nova_t_decmt,
+            nova_v: None,
+            nova_v_cmt: None,
+            nova_v_decmt: None,
             priv_cmt,
             proj: None,
             tag,
@@ -264,9 +268,8 @@ impl<A: arkPrimeField> Table<A> {
         prover: bool,
         gens: Option<&HyraxPC<E1>>,
         proofs: &mut HashMap<usize, NLProofInfo>,
-        blind: Option<N1>,
     ) -> VComp<A> {
-        println!("sub_tables {:#?}, q {:#?}", sub_tables, q);
+        //        println!("sub_tables {:#?}, q {:#?}", sub_tables, q);
         assert!(sub_tables.len() >= 1);
 
         if sub_tables.len() == 1 {
@@ -339,17 +342,11 @@ impl<A: arkPrimeField> Table<A> {
 
                             let v = t.nova_t.as_ref().unwrap().evaluate(&proj_q);
 
-                            println!("proj q = {:#?}, v = {:#?}", proj_q.clone(), v.clone());
                             let (proof_info, v_blind) =
-                                t.prove_dot_prod(gens.as_ref().unwrap(), proj_q, v, blind); // TODO
+                                t.prove_dot_prod(gens.as_ref().unwrap(), proj_q, v);
                             let v_commit = proof_info.v_commit.clone();
                             proofs.insert(t.tag, proof_info);
 
-                            println!(
-                                "COMMITING PROVER v:{:#?}, blind:{:#?}",
-                                v_commit.clone(),
-                                v_blind.clone()
-                            );
                             VComp::ProverCmt(v_commit, v_blind.clone())
                         } else {
                             // verifier
@@ -444,92 +441,39 @@ impl<A: arkPrimeField> Table<A> {
                 assert!(sub_len <= half_len);
             }
 
-            let q0 = ark_to_nova_field::<A, N1>(&q[0]);
-
-            let (left_blind, right_blind) = if blind.is_some() {
-                let priv_left = sub_vec_left
-                    .iter()
-                    .any(|t| matches!(t, TableInfo::Private(..)));
-                let priv_right = sub_vec_right
-                    .iter()
-                    .any(|t| matches!(t, TableInfo::Private(..)));
-
-                if priv_left && priv_right {
-                    println!("two private tables blinds");
-                    let lb = N1::random(&mut OsRng);
-                    // teMP
-                    assert_eq!(
-                        lb * (N1::one() - q0)
-                            + (q0
-                                * (blind.unwrap() - lb * (N1::one() - q0))
-                                * q0.invert().unwrap()),
-                        blind.unwrap()
-                    );
-
-                    (
-                        Some(lb),
-                        Some((blind.unwrap() - lb * (N1::one() - q0)) * q0.invert().unwrap()),
-                    )
-                } else if priv_left {
-                    (
-                        Some(blind.unwrap() * (N1::one() - q0).invert().unwrap()),
-                        None,
-                    )
-                } else if priv_right {
-                    (None, Some(blind.unwrap() * q0.invert().unwrap()))
-                } else {
-                    (None, None)
-                }
-            } else {
-                (None, None)
-            };
-
             match (
-                Self::calc_sub_v(sub_vec_left, &q[1..], prover, gens, proofs, left_blind),
-                Self::calc_sub_v(sub_vec_right, &q[1..], prover, gens, proofs, right_blind),
+                Self::calc_sub_v(sub_vec_left, &q[1..], prover, gens, proofs),
+                Self::calc_sub_v(sub_vec_right, &q[1..], prover, gens, proofs),
             ) {
                 (VComp::ArkScalar(l), VComp::ArkScalar(r)) => {
                     VComp::ArkScalar((A::one() - q[0]) * l + q[0] * r)
                 }
                 (VComp::NovaScalar(l), VComp::NovaScalar(r)) => {
+                    let q0 = ark_to_nova_field::<A, N1>(&q[0]);
                     VComp::NovaScalar((N1::one() - q0) * l + q0 * r)
                 }
                 (VComp::Cmt(l), VComp::Cmt(r)) => {
-                    println!("verifier cmb cmts");
+                    let q0 = ark_to_nova_field::<A, N1>(&q[0]);
                     VComp::Cmt(l * (N1::one() - q0) + r * q0)
                 }
                 (VComp::ProverCmt(l, dl), VComp::ProverCmt(r, dr)) => {
-                    println!("two private cmts comb");
+                    let q0 = ark_to_nova_field::<A, N1>(&q[0]);
                     VComp::ProverCmt(
                         l * (N1::one() - q0) + r * q0,
                         dl * (N1::one() - q0) + dr * q0,
                     )
                 }
-                // hybrid cases
                 (VComp::NovaScalar(l), VComp::Cmt(r)) => {
-                    // cmt to public value
-                    let cmt =
-                        <E1 as Engine>::CE::commit(&gens.as_ref().unwrap().ck_s, &[l], &N1::ZERO);
-                    VComp::Cmt(cmt * (N1::one() - q0) + r * q0)
+                    VComp::Cmt(r) // TODO
+                                  /* let q0 = ark_to_nova_field::<A, N1>(&q[0]);
+                                                     let hyrax = gens.unwrap();
+                                                      let cmt_l = hyrax
+                                                      VComp::Cmt(l * (N1::one() - q0) + r * q0)
+                                  */
                 }
-                (VComp::Cmt(l), VComp::NovaScalar(r)) => {
-                    // cmt to public value
-                    let cmt =
-                        <E1 as Engine>::CE::commit(&gens.as_ref().unwrap().ck_s, &[r], &N1::ZERO);
-                    VComp::Cmt(l * (N1::one() - q0) + cmt * q0)
-                }
-                (VComp::NovaScalar(l), VComp::ProverCmt(r, dr)) => {
-                    // cmt to public value
-                    let cmt =
-                        <E1 as Engine>::CE::commit(&gens.as_ref().unwrap().ck_s, &[l], &N1::ZERO);
-                    VComp::ProverCmt(cmt * (N1::one() - q0) + r * q0, dr * q0)
-                }
-                (VComp::ProverCmt(l, dl), VComp::NovaScalar(r)) => {
-                    // cmt to public value
-                    let cmt =
-                        <E1 as Engine>::CE::commit(&gens.as_ref().unwrap().ck_s, &[r], &N1::ZERO);
-                    VComp::ProverCmt(l * (N1::one() - q0) + cmt * q0, dl * (N1::one() - q0))
-                }
+                (VComp::Cmt(l), VComp::NovaScalar(r)) => VComp::Cmt(l),
+                (VComp::NovaScalar(l), VComp::ProverCmt(r, dr)) => VComp::ProverCmt(r, dr),
+                (VComp::ProverCmt(l, dl), VComp::NovaScalar(r)) => VComp::ProverCmt(l, dl),
                 (l, r) => panic!("type mismatch during v calc: {:#?} vs {:#?}", l, r),
             }
         }
@@ -543,7 +487,6 @@ impl<A: arkPrimeField> Table<A> {
         prover: bool,
         gens: Option<&HyraxPC<E1>>,
         proofs: &mut HashMap<usize, NLProofInfo>,
-        blind: Option<N1>,
     ) -> VComp<A> {
         let mut sliced_tables = Vec::new();
         let mut table_len = 0;
@@ -570,7 +513,7 @@ impl<A: arkPrimeField> Table<A> {
             sliced_tables.push(TableInfo::Filler(filler));
         }
 
-        Self::calc_sub_v(sliced_tables, &running_q, prover, gens, proofs, blind)
+        Self::calc_sub_v(sliced_tables, &running_q, prover, gens, proofs)
     }
 
     fn verify_dot_prod(&self, verifier_gens: &HyraxPC<E1>, info: &NLProofInfo) {
@@ -589,26 +532,31 @@ impl<A: arkPrimeField> Table<A> {
         assert!(res.is_ok());
     }
 
+    pub fn prover_set_v(&mut self, v: N1, v_cmt: Commitment<E1>, v_decmt: N1) {
+        self.nova_v = Some(v);
+        self.nova_v_cmt = Some(v_cmt);
+        self.nova_v_decmt = Some(v_decmt);
+    }
+
     fn prove_dot_prod(
         &self,
         prover_gens: &HyraxPC<E1>,
         proj_q: Vec<N1>,
         eval: N1,
-        blind: Option<N1>,
     ) -> (NLProofInfo, N1) {
         assert!(self.priv_cmt.is_some());
         assert!(self.nova_t.is_some());
         assert!(self.nova_t_cmt.is_some());
         assert!(self.nova_t_decmt.is_some());
+        assert!(self.nova_v.is_some());
+        assert!(self.nova_v_cmt.is_some());
+        assert!(self.nova_v_decmt.is_some());
 
         let mut prover_transcript = <E1 as Engine>::TE::new(b"dot_prod");
 
-        let v_blind = if blind.is_some() {
-            blind.unwrap()
-        } else {
-            panic!()
-        }; // TODO
-        let v_commit = <E1 as Engine>::CE::commit(&prover_gens.ck_s, &[eval], &v_blind);
+        //let blind = N1::random(&mut OsRng);
+        // sanity
+        assert_eq!(eval, self.nova_v.unwrap());
 
         let (ipa_proof, _ipa_witness): (InnerProductArgument<E1>, InnerProductWitness<E1>) =
             prover_gens
@@ -617,9 +565,9 @@ impl<A: arkPrimeField> Table<A> {
                     self.nova_t_cmt.as_ref().unwrap(),
                     self.nova_t_decmt.as_ref().unwrap(),
                     &proj_q,
-                    &eval,
-                    &v_commit,
-                    &v_blind,
+                    self.nova_v.as_ref().unwrap(),
+                    self.nova_v_cmt.as_ref().unwrap(),
+                    self.nova_v_decmt.as_ref().unwrap(),
                     &mut prover_transcript,
                 )
                 .unwrap();
@@ -628,9 +576,9 @@ impl<A: arkPrimeField> Table<A> {
             NLProofInfo {
                 ipa: ipa_proof,
                 proj_q,
-                v_commit,
+                v_commit: self.nova_v_cmt.clone().unwrap(),
             },
-            v_blind,
+            self.nova_v_decmt.clone().unwrap(),
         )
     }
 }

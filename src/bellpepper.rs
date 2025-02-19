@@ -159,13 +159,7 @@ impl<N: novaPrimeField<Repr = [u8; 32]>> FCircuit<N> {
     pub fn get_z_i_plus_1(&self) -> &Vec<N> {
         return &self.output_assignments;
     }
-
-    
-
 }
-
-
-
 
 impl<N: novaPrimeField<Repr = [u8; 32]>> StepCircuit<N> for FCircuit<N> {
     fn arity(&self) -> usize {
@@ -200,15 +194,14 @@ impl<N: novaPrimeField<Repr = [u8; 32]>> StepCircuit<N> for FCircuit<N> {
             if i % 2 == 0 {
                 // input
                 alloc_io.push(z[i / 2].clone());
-                if z[i/2].get_value().is_some() {
-                temp_io.push(z[i/2].get_value().unwrap());
+                if z[i / 2].get_value().is_some() {
+                    temp_io.push(z[i / 2].get_value().unwrap());
                 }
-
             } else {
                 // output
                 alloc_io.push(alloc_out[(i - 1) / 2].clone()); // TODO?
                 if alloc_out[(i - 1) / 2].get_value().is_some() {
-                temp_io.push(alloc_out[(i - 1) / 2].get_value().unwrap());
+                    temp_io.push(alloc_out[(i - 1) / 2].get_value().unwrap());
                 }
             }
         }
@@ -228,23 +221,18 @@ impl<N: novaPrimeField<Repr = [u8; 32]>> StepCircuit<N> for FCircuit<N> {
             let b_lc = bellpepper_lc::<N, CS>(&alloc_io, &alloc_wits, b, i);
             let c_lc = bellpepper_lc::<N, CS>(&alloc_io, &alloc_wits, c, i);
 
-        
             // if temp_io.len() > 0 {
             // let mut a_eval = a_lc.clone().eval(&temp_io, &&self.wit_assignments);
             // let mut b_eval = b_lc.clone().eval(&temp_io, &&self.wit_assignments);
             // let mut c_eval = c_lc.clone().eval(&temp_io, &&self.wit_assignments);
             // a_eval.mul_assign(&b_eval);
-    
+
             // if a_eval != c_eval {
             //     println!("{:#?}", i);
             // }
-        // }
+            // }
 
             cs.enforce(|| format!("con{}", i), |_| a_lc, |_| b_lc, |_| c_lc);
-        
-            
-            
-        
         }
 
         // println!("z_out fc {:?}", alloc_out);
@@ -523,11 +511,6 @@ mod tests {
         let circuit_secondary = TrivialCircuit::default();
         let mut circuit_primary = make_ark_circuit(&zi_list[0]);
 
-        
-
-
-
-
         let z0_primary = circuit_primary.get_zi().clone();
         assert_eq!(
             z0_primary,
@@ -548,6 +531,7 @@ mod tests {
             &circuit_secondary,
             &*default_ck_hint(),
             &*default_ck_hint(),
+            0,
         )
         .unwrap();
 
@@ -603,23 +587,28 @@ mod tests {
         return zn_primary;
     }
 
-
     fn make_circuit_2(z_in: &Vec<AF>, i: usize) -> FCircuit<<NG as Group>::Scalar> {
         let cs = ConstraintSystem::<AF>::new_ref();
 
-        let i_wit = FpVar::new_witness(cs.clone(), ||Ok(AF::from(i as u32))).unwrap();
+        let i_wit = FpVar::new_witness(cs.clone(), || Ok(AF::from(i as u32))).unwrap();
         let a_val = z_in[0].clone();
         let b_val = z_in[1].clone();
 
         println!("a val {:?}", a_val);
         println!("b val {:?}", b_val);
 
-
-        let (a_in, a_out) =
-            FpVar::new_input_output_pair(cs.clone(), || Ok(a_val), || Ok(a_val + i_wit.value().unwrap())).unwrap();
-        let (b_in, b_out) =
-            FpVar::new_input_output_pair(cs.clone(), || Ok(b_val), || Ok((b_val + a_val) + i_wit.value().unwrap()))
-                .unwrap();
+        let (a_in, a_out) = FpVar::new_input_output_pair(
+            cs.clone(),
+            || Ok(a_val),
+            || Ok(a_val + i_wit.value().unwrap()),
+        )
+        .unwrap();
+        let (b_in, b_out) = FpVar::new_input_output_pair(
+            cs.clone(),
+            || Ok(b_val),
+            || Ok((b_val + a_val) + i_wit.value().unwrap()),
+        )
+        .unwrap();
 
         // a_in + i = a_out
         a_out.enforce_equal(&(a_in.clone() + &i_wit)).unwrap();
@@ -630,26 +619,23 @@ mod tests {
         FCircuit::new(cs)
     }
 
-    pub fn run_prover(zi_list: Vec<Vec<AF>>,
-        num_steps: usize,) {
+    pub fn run_prover(zi_list: Vec<Vec<AF>>, num_steps: usize) {
         // -> Vec<<NG as Group>::Scalar> {
         //Round Zero to set up primary params
-    
-        let mut circuit_primary =
-            make_circuit_2(&zi_list[0],0);
-    
-          
+
+        let mut circuit_primary = make_circuit_2(&zi_list[0], 0);
+
         let z0_primary = circuit_primary.get_zi().clone();
         assert_eq!(
-                z0_primary,
-                zi_list[0]
-                    .iter()
-                    .map(|f| ark_to_nova_field::<AF, <NG as Group>::Scalar>(f))
-                    .collect::<Vec<<NG as Group>::Scalar>>()
+            z0_primary,
+            zi_list[0]
+                .iter()
+                .map(|f| ark_to_nova_field::<AF, <NG as Group>::Scalar>(f))
+                .collect::<Vec<<NG as Group>::Scalar>>()
         );
-    
+
         let circuit_secondary = TrivialCircuit::default();
-    
+
         // produce public parameters
         let pp = PublicParams::<
             E1,
@@ -661,9 +647,10 @@ mod tests {
             &circuit_secondary,
             &*default_ck_hint(),
             &*default_ck_hint(),
+            0,
         )
         .unwrap();
-    
+
         // produce a recursive SNARK
         let mut recursive_snark = RecursiveSNARK::<
             E1,
@@ -678,19 +665,17 @@ mod tests {
             &[<E2 as Engine>::Scalar::zero()],
         )
         .unwrap();
-    
+
         //Actually prove things now
         for i in 0..num_steps {
             println!("round {:?}", i);
-            circuit_primary = make_circuit_2(&zi_list[i],i);
+            circuit_primary = make_circuit_2(&zi_list[i], i);
 
             let res = recursive_snark.prove_step(&pp, &circuit_primary, &circuit_secondary);
-            assert!(res.is_ok()," res {:?}", res);
+            assert!(res.is_ok(), " res {:?}", res);
 
-
-    
             let v_res =
-                recursive_snark.verify(&pp, i+1, &z0_primary, &[<E2 as Engine>::Scalar::zero()]);
+                recursive_snark.verify(&pp, i + 1, &z0_primary, &[<E2 as Engine>::Scalar::zero()]);
             assert!(v_res.is_ok(), "v_res {:?}", v_res);
         }
 
@@ -725,10 +710,10 @@ mod tests {
     #[test]
     fn test_prover() {
         let zi_list = vec![
-            vec![AF::one(), AF::one()], //0
-            vec![AF::one(), AF::from(2)], //1
+            vec![AF::one(), AF::one()],     //0
+            vec![AF::one(), AF::from(2)],   //1
             vec![AF::from(2), AF::from(4)], //2
-            vec![AF::from(4), AF::from(8)],//3
+            vec![AF::from(4), AF::from(8)], //3
         ];
         run_prover(zi_list, 4);
     }

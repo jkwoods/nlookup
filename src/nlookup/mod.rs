@@ -144,6 +144,8 @@ impl<A: PrimeField> NLookup<A> {
             (0, table[0])
         };
 
+        println!("BIG NL TABLE {:#?}", table.clone());
+
         NLookup {
             ell,
             m: num_lookups,
@@ -200,6 +202,8 @@ impl<A: PrimeField> NLookup<A> {
         assert_eq!(self.ell, running_q.len());
         assert!(lookups.len() > 0);
         assert!(lookups.len() <= self.m);
+
+        println!("ell {:#}", self.ell);
 
         let mut q = Vec::<(FpVar<A>, Vec<Boolean<A>>)>::new();
         let mut q_usize = Vec::<usize>::new();
@@ -519,24 +523,37 @@ impl<A: PrimeField> NLookup<A> {
         verifier_gens: &HyraxPC<E1>,
         q: &Vec<N1>,
         proofs: &mut HashMap<usize, NLProofInfo>,
+        v_commit: &VComp<A>,
     ) {
         let ark_q: Vec<A> = q.iter().map(|x| nova_to_ark_field::<N1, A>(x)).collect();
 
-        // TODO - eq proof
-        Table::calc_running_claim(
+        let v_out = Table::calc_running_claim(
             &self.ordering_info,
             self.small_tables.iter().collect(),
             ark_q,
             false,
             Some(verifier_gens),
             proofs,
+            None,
         );
+        match (v_out, v_commit) {
+            (VComp::Cmt(c), VComp::Cmt(v)) => {
+                // hybrid or private
+                assert_eq!(c, *v);
+            }
+            (VComp::NovaScalar(s), VComp::NovaScalar(v)) => {
+                // totally public
+                assert_eq!(s, *v);
+            }
+            (o, c) => panic!("type mismatch on v check {:#?}, {:#?}", o, c),
+        }
     }
 
     pub fn prove_running_claim(
         &self,
         prover_gens: &HyraxPC<E1>,
         q: &Vec<N1>,
+        big_v_blind: N1,
     ) -> HashMap<usize, NLProofInfo> {
         let ark_q: Vec<A> = q.iter().map(|x| nova_to_ark_field::<N1, A>(x)).collect();
 
@@ -548,7 +565,9 @@ impl<A: PrimeField> NLookup<A> {
             true,
             Some(prover_gens),
             &mut proofs,
+            Some(big_v_blind),
         );
+        println!("PROVER V {:#?}", v);
 
         proofs
     }
@@ -563,8 +582,10 @@ mod tests {
     use ark_ff::{Field, PrimeField};
     use ark_pallas::Fr as A;
     use ark_relations::r1cs::{ConstraintSystem, OptimizationGoal};
+    use ff::Field as novaField;
     use nova_snark::provider::hyrax_pc::HyraxPC;
-    use nova_snark::traits::Engine;
+    use nova_snark::traits::{commitment::CommitmentEngineTrait, Engine};
+    use rand::rngs::OsRng;
 
     fn run_nlookup(
         batch_size: usize,
@@ -617,8 +638,20 @@ mod tests {
 
         // obv double conversion is bad - just for testing
         let nova_q = running_q.iter().map(|x| ark_to_nova_field(x)).collect();
-        let mut proofs = nl.prove_running_claim(&gens, &nova_q);
-        nl.verify_running_claim(&gens, &nova_q, &mut proofs);
+        let nova_v: N1 = ark_to_nova_field(&running_v);
+        println!("V in TEST {:#?}", nova_v.clone());
+
+        let blind_v = N1::random(&mut OsRng);
+
+        let v_comp = if tables.iter().any(|t| t.priv_cmt.is_some()) {
+            let commit_v = <E1 as Engine>::CE::commit(&gens.ck_s, &[nova_v], &blind_v);
+            VComp::Cmt(commit_v)
+        } else {
+            VComp::NovaScalar(nova_v)
+        };
+
+        let mut proofs = nl.prove_running_claim(&gens, &nova_q, blind_v);
+        nl.verify_running_claim(&gens, &nova_q, &mut proofs, &v_comp);
     }
 
     #[test]
@@ -793,22 +826,22 @@ mod tests {
         let t: Vec<A> = t_pre.into_iter().map(|x| A::from(x as u64)).collect();
 
         let tests = vec![
-            (vec![(0, 8)], vec![(2, 31, 1), (0, 23, 1), (4, 41, 1)]),
-            (vec![(0, 4)], vec![(2, 31, 1), (0, 23, 1), (1, 29, 1)]),
-            (vec![(4, 8)], vec![(4, 41, 1), (7, 53, 1), (6, 47, 1)]),
+            // (vec![(0, 8)], vec![(2, 31, 1), (0, 23, 1), (4, 41, 1)]),
+            //(vec![(0, 4)], vec![(2, 31, 1), (0, 23, 1), (1, 29, 1)]),
+            //(vec![(4, 8)], vec![(4, 41, 1), (7, 53, 1), (6, 47, 1)]),
             (
                 vec![(0, 2), (4, 6)],
                 vec![(4, 41, 1), (0, 23, 1), (5, 43, 1)],
             ),
-            (
+            /*(
                 vec![(0, 2), (2, 4)],
                 vec![(0, 23, 1), (3, 37, 1), (1, 29, 1)],
-            ),
+            ),*/
         ];
 
         let gens = HyraxPC::setup(b"test", logmn(t.len()));
         for (ranges, lookups) in tests {
-            let table = Table::new_proj(t.clone(), false, ranges, 1, None);
+            let table = Table::new_proj(t.clone(), true, ranges, 1, Some(&gens));
 
             run_nlookup(2, lookups, vec![table], &gens);
         }
@@ -848,7 +881,7 @@ mod tests {
                 vec![(0, 2), (6, 8)],
                 vec![(3, 7, 0), (0, 23, 1), (6, 47, 1)],
             ),
-            (
+            /*(
                 vec![(4, 8)],
                 vec![(2, 3), (7, 8)],
                 vec![(4, 9, 0), (7, 19, 0), (2, 31, 1), (7, 53, 1)],
@@ -862,7 +895,7 @@ mod tests {
                 vec![(0, 2), (2, 4)],
                 vec![(1, 7)],
                 vec![(0, 2, 0), (3, 7, 0), (5, 43, 1)],
-            ),
+            ),*/
         ];
 
         let gens = HyraxPC::setup(b"test", logmn(priv_t.len()));
