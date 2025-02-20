@@ -1,6 +1,6 @@
 use crate::{
     bellpepper::{ark_to_nova_field, nova_to_ark_field},
-    utils::{logmn, mle_eval},
+    utils::*,
 };
 use ark_ff::PrimeField as arkPrimeField;
 use ff::{Field as novaField, PrimeField as novaPrimeField, PrimeFieldBits};
@@ -19,12 +19,6 @@ use nova_snark::{
 use rand::rngs::OsRng;
 use std::collections::HashMap;
 use std::ops::{Add, Mul};
-
-// we have to hardcode these, unfortunately
-pub(crate) type E1 = nova_snark::provider::PallasEngine;
-pub(crate) type E2 = nova_snark::provider::VestaEngine;
-pub(crate) type N1 = <E1 as Engine>::Scalar;
-pub(crate) type N2 = <E2 as Engine>::Scalar;
 
 #[derive(Clone, Debug)]
 pub struct Table<A: arkPrimeField> {

@@ -5,6 +5,13 @@ use ark_r1cs_std::{
     prelude::AllocationMode, R1CSVar,
 };
 use ark_relations::r1cs::SynthesisError;
+use nova_snark::traits::Engine;
+
+// we have to hardcode these, unfortunately
+pub(crate) type E1 = nova_snark::provider::PallasEngine;
+pub(crate) type E2 = nova_snark::provider::VestaEngine;
+pub(crate) type N1 = <E1 as Engine>::Scalar;
+pub(crate) type N2 = <E2 as Engine>::Scalar;
 
 pub fn logmn(mn: usize) -> usize {
     match mn {
