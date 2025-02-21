@@ -266,6 +266,7 @@ impl<A: arkPrimeField> Table<A> {
             match sub_tables[0].clone() {
                 TableInfo::Public(t) => {
                     if q.len() == 0 {
+                        println!("HIT");
                         let ell = logmn(t.len());
                         let real_q = vec![A::zero(); ell];
 

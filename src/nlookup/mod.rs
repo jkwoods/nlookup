@@ -652,6 +652,19 @@ mod tests {
     }
 
     #[test]
+    #[should_panic]
+    fn nl_one() {
+        let t_pre = vec![2];
+        let t: Vec<A> = t_pre.into_iter().map(|x| A::from(x as u64)).collect();
+        let table = Table::new(t, false, 0, None);
+
+        let lookups = vec![(0, 2, 0)];
+
+        let gens = HyraxPC::setup(b"test", logmn(8));
+        run_nlookup(3, lookups, vec![table], &gens);
+    }
+
+    #[test]
     fn nl_basic() {
         let t_pre = vec![2, 3, 5, 7, 9, 13, 17, 19];
         let t: Vec<A> = t_pre.into_iter().map(|x| A::from(x as u64)).collect();
