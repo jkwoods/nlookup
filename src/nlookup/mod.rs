@@ -518,6 +518,14 @@ impl<A: PrimeField> NLookup<A> {
         eq_t
     }
 
+    // call before passing to verifier
+    pub fn publicize(&mut self) {
+        self.table = vec![];
+        for t in &mut self.small_tables {
+            t.publicize();
+        }
+    }
+
     pub fn verify_running_claim(
         &self,
         verifier_gens: &HyraxPC<E1>,
@@ -648,6 +656,8 @@ mod tests {
         };
 
         let mut proofs = nl.prove_running_claim(&gens, &nova_q, blind_v);
+
+        nl.publicize();
         nl.verify_running_claim(&gens, &nova_q, &mut proofs, &v_comp);
     }
 
@@ -836,17 +846,17 @@ mod tests {
         let t: Vec<A> = t_pre.into_iter().map(|x| A::from(x as u64)).collect();
 
         let tests = vec![
-            // (vec![(0, 8)], vec![(2, 31, 1), (0, 23, 1), (4, 41, 1)]),
-            //(vec![(0, 4)], vec![(2, 31, 1), (0, 23, 1), (1, 29, 1)]),
-            //(vec![(4, 8)], vec![(4, 41, 1), (7, 53, 1), (6, 47, 1)]),
+            (vec![(0, 8)], vec![(2, 31, 1), (0, 23, 1), (4, 41, 1)]),
+            (vec![(0, 4)], vec![(2, 31, 1), (0, 23, 1), (1, 29, 1)]),
+            (vec![(4, 8)], vec![(4, 41, 1), (7, 53, 1), (6, 47, 1)]),
             (
                 vec![(0, 2), (4, 6)],
                 vec![(4, 41, 1), (0, 23, 1), (5, 43, 1)],
             ),
-            /*(
+            (
                 vec![(0, 2), (2, 4)],
                 vec![(0, 23, 1), (3, 37, 1), (1, 29, 1)],
-            ),*/
+            ),
         ];
 
         let gens = HyraxPC::setup(b"test", logmn(t.len()));

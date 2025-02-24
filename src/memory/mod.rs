@@ -51,3 +51,84 @@ pub fn incr_commit_to_ram<A: arkPrimeField>(
 
     (ci.unwrap(), blinds)
 }
+/*
+mod tests {
+    use crate::memory::*;
+    use ark_pallas::Fr as A;
+
+    fn make_full_mem_circ() -> FCircuit<N1> {
+        let cs = ConstraintSystem::<A>::new_ref();
+    }
+
+    fn run_ram_and_nl_with_nova() {
+        // commitments
+
+        // nova
+        let circuit_secondary = TrivialCircuit::default();
+        let mut circuit_primary = make_full_mem_circ();
+
+        let z0_primary = circuit_primary.get_zi().clone();
+
+        // produce public parameters
+        let pp = PublicParams::<
+            E1,
+            E2,
+            FCircuit<<E1 as Engine>::Scalar>,
+            TrivialCircuit<<E2 as Engine>::Scalar>,
+        >::setup(
+            &circuit_primary,
+            &circuit_secondary,
+            &*default_ck_hint(),
+            &*default_ck_hint(),
+            TODO,
+        )
+        .unwrap();
+
+        // produce a recursive SNARK
+        let mut recursive_snark = RecursiveSNARK::<
+            E1,
+            E2,
+            FCircuit<<E1 as Engine>::Scalar>,
+            TrivialCircuit<<E2 as Engine>::Scalar>,
+        >::new(
+            &pp,
+            &circuit_primary,
+            &circuit_secondary,
+            &z0_primary,
+            &[<E2 as Engine>::Scalar::ZERO],
+        )
+        .unwrap();
+
+        for i in 0..num_steps {
+            let res = recursive_snark.prove_step(&pp, &circuit_primary, &circuit_secondary);
+            assert!(res.is_ok());
+            res.unwrap();
+
+            // verify the recursive SNARK
+            let res = recursive_snark.verify(
+                &pp,
+                num_steps,
+                &z0_primary,
+                &[<E2 as Engine>::Scalar::ZERO],
+            );
+            assert!(res.is_ok());
+
+            circuit_primary = make_full_mem_circ();
+        }
+
+        // produce the prover and verifier keys for compressed snark
+        let (pk, vk) = CompressedSNARK::<_, _, _, _, S1, S2>::setup(&pp).unwrap();
+
+        // produce a compressed SNARK
+        let res = CompressedSNARK::<_, _, _, _, S1, S2>::prove(&pp, &pk, &recursive_snark);
+        assert!(res.is_ok());
+        let compressed_snark = res.unwrap();
+
+        // verify the compressed SNARK
+        let res =
+            compressed_snark.verify(&vk, num_steps, &z0_primary, &[<E2 as Engine>::Scalar::ZERO]);
+        assert!(res.is_ok());
+
+        // check final cmt outputs
+    }
+}*/

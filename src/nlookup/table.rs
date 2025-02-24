@@ -525,7 +525,7 @@ impl<A: arkPrimeField> Table<A> {
 
             if table.proj.is_some() {
                 assert!(table.proj.as_ref().unwrap().contains(&proj));
-            } else {
+            } else if prover {
                 assert_eq!(table.t.len(), proj.1 - proj.0);
             }
 
@@ -605,5 +605,13 @@ impl<A: arkPrimeField> Table<A> {
             },
             v_blind,
         )
+    }
+
+    pub fn publicize(&mut self) {
+        if self.priv_cmt.is_some() {
+            self.t = vec![];
+            self.nova_t = None;
+            self.nova_t_decmt = None;
+        }
     }
 }

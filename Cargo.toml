@@ -21,8 +21,8 @@ bellpepper-core = { version="0.4.0", default-features = false }
 bellpepper = { version="0.4.0", default-features = false }
 ff = { version = "0.13.0", features = ["derive"] }
 pasta_curves = { version = "0.5", features = ["repr-c", "serde"] }
-#nova-snark = { path = "../Nova", default-features = false }
-nova-snark = { git = "https://github.com/jkwoods/Nova.git", branch = "cmts", default-features = false }
+nova-snark = { path = "../Nova", default-features = false }
+#nova-snark = { git = "https://github.com/jkwoods/Nova.git", branch = "cmts", default-features = false }
 tracing-subscriber = { version = "0.2" }
 tracing = { version = "0.1", default-features = false, features = [ "attributes" ] }
 
