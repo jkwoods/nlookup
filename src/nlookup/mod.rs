@@ -35,7 +35,7 @@ pub struct NLookupWires<A: PrimeField> {
     pub next_running_v: FpVar<A>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct NLookup<A: PrimeField> {
     ell: usize, // for "big" table
     m: usize,
