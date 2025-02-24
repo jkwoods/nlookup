@@ -46,7 +46,7 @@ pub struct NLProofInfo {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) enum VComp<A: arkPrimeField> {
+pub enum VComp<A: arkPrimeField> {
     ArkScalar(A), // in the clear sanity
     NovaScalar(N1),
     Cmt(Commitment<E1>),
