@@ -1,3 +1,4 @@
+use crate::bellpepper::AllocIoVar;
 use ark_ff::PrimeField;
 use ark_r1cs_std::{
     alloc::AllocVar,
@@ -763,6 +764,60 @@ impl<F: PrimeField> StackRunningMem<F> {
     }
 }
 
+pub fn ivcify_stack_op<F: PrimeField>(
+    prev_ops: &Vec<MemElemWires<F>>,
+    next_ops: &Vec<MemElemWires<F>>,
+    cs: ConstraintSystemRef<F>,
+) -> Result<(), SynthesisError> {
+    assert_eq!(prev_ops.len(), next_ops.len());
+    for i in 0..prev_ops.len() {
+        let (time_in, time_out) = FpVar::new_input_output_pair(
+            cs.clone(),
+            || Ok(prev_ops[i].time.value()?),
+            || Ok(next_ops[i].time.value()?),
+        )?;
+        prev_ops[i].time.enforce_equal(&time_in)?;
+        next_ops[i].time.enforce_equal(&time_out)?;
+
+        let (addr_in, addr_out) = FpVar::new_input_output_pair(
+            cs.clone(),
+            || Ok(prev_ops[i].addr.value()?),
+            || Ok(next_ops[i].addr.value()?),
+        )?;
+        prev_ops[i].addr.enforce_equal(&addr_in)?;
+        next_ops[i].addr.enforce_equal(&addr_out)?;
+
+        let (rw_in, rw_out) = Boolean::new_input_output_pair(
+            cs.clone(),
+            || Ok(prev_ops[i].rw.value()?),
+            || Ok(next_ops[i].rw.value()?),
+        )?;
+        prev_ops[i].rw.enforce_equal(&rw_in)?;
+        next_ops[i].rw.enforce_equal(&rw_out)?;
+
+        assert_eq!(prev_ops[i].vals.len(), 2);
+        assert_eq!(next_ops[i].vals.len(), 2);
+
+        for j in 0..prev_ops[i].vals.len() {
+            let (val_j_in, val_j_out) = FpVar::new_input_output_pair(
+                cs.clone(),
+                || Ok(prev_ops[i].vals[j].value()?),
+                || Ok(next_ops[i].vals[j].value()?),
+            )?;
+            prev_ops[i].vals[j].enforce_equal(&val_j_in)?;
+            next_ops[i].vals[j].enforce_equal(&val_j_out)?;
+        }
+        let (sr_in, sr_out) = Boolean::new_input_output_pair(
+            cs.clone(),
+            || Ok(prev_ops[i].sr.value()?),
+            || Ok(next_ops[i].sr.value()?),
+        )?;
+        prev_ops[i].sr.enforce_equal(&sr_in)?;
+        next_ops[i].sr.enforce_equal(&sr_out)?;
+    }
+    Ok(())
+}
+
 mod tests {
 
     use crate::memory::heckaton::*;
@@ -797,9 +852,9 @@ mod tests {
 
                 let mut rw = rsm.begin_new_circuit(cs.clone()).unwrap();
 
-                let mut not_stack = Boolean::new_witness(cs.clone(), || Ok(false)).unwrap();
+                let not_stack = Boolean::new_witness(cs.clone(), || Ok(false)).unwrap();
 
-                let mut ram = Boolean::new_witness(cs.clone(), || Ok(true)).unwrap();
+                let ram = Boolean::new_witness(cs.clone(), || Ok(true)).unwrap();
 
                 for bb in 0..b {
                     //     if rand == bb {

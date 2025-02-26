@@ -389,6 +389,7 @@ mod tests {
             &*default_ck_hint(),
             &*default_ck_hint(),
             0,
+            &[],
         )
         .unwrap();
 
@@ -505,6 +506,7 @@ mod tests {
             &*default_ck_hint(),
             &*default_ck_hint(),
             0,
+            &[],
         )
         .unwrap();
 
