@@ -271,6 +271,8 @@ pub struct RunningMemWires<F: PrimeField> {
 
 impl<F: PrimeField> RunningMem<F> {
     // all t elements should have the same size val vectors
+    //This filters out all entries with time and addr set to 0 as "padding"
+    //unfortunately you need those for the incemental memory but not for the circuit itself 
     pub fn new(
         mut t: Vec<MemElem<F>>,
         has_stack: bool,
