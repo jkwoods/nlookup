@@ -222,7 +222,9 @@ mod tests {
         let mem_pad = MemElem::<A>::new(0, 0, false, vec![0; time_list[0].vals.len()], false);
         let mut rsm = RunningMem::new(time_list, false, mem_pad.clone());
 
-        let (C_final, blinds) = incr_commit_to_ram(&ic_gens, &rsm, batch_size);
+        let (t,a) = rsm.get_t_a();
+
+        let (C_final, blinds) = incr_commit_to_ram(&ic_gens, &t, &a, batch_size);
 
         // nova
         let circuit_secondary = TrivialCircuit::default();
