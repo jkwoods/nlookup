@@ -1,4 +1,4 @@
-use crate::bellpepper::AllocIoVar;
+use crate::{bellpepper::AllocIoVar, memory::incr_commit_to_ram, utils::*};
 use ark_ff::PrimeField;
 use ark_r1cs_std::{
     alloc::AllocVar,
@@ -12,6 +12,7 @@ use ark_relations::{
     r1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisError, Variable},
 };
 use ark_std::test_rng;
+use nova_snark::provider::incremental::Incremental;
 use std::collections::HashMap;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -314,6 +315,55 @@ impl<F: PrimeField> RunningMem<F> {
             running_t_F: F::zero(),
             running_a_F: F::zero(),
         }
+    }
+
+    pub fn new_with_mem(
+        mut t: Vec<MemElem<F>>,
+        has_stack: bool,
+        padding: MemElem<F>,
+        batch_size: usize, 
+        ic_scheme: &Incremental<E1, E2>
+    ) -> (Self, N2, Vec<N1>) {
+        assert!(t.len() > 0);
+
+        let vec_len = t[0].vals.len();
+        assert!(vec_len > 0);
+
+        t.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap());
+
+        let mut a_sort = t.clone();
+        a_sort.sort_by(|a, b| a.addr.partial_cmp(&b.addr).unwrap());
+
+        let (gen, blind) = incr_commit_to_ram(ic_scheme, &t, &a_sort, batch_size);
+
+        let no_pad_t: Vec<MemElem<F>> = t
+            .iter()
+            .filter(|&x| x.time != F::ZERO && x.addr != F::ZERO)
+            .cloned()
+            .collect();
+
+        let mut no_pad_a = no_pad_t.clone();
+        no_pad_a.sort_by(|a, b| a.addr.partial_cmp(&b.addr).unwrap());
+
+        // println!("A list {:#?}", a.clone());
+
+        let mut rng = test_rng();
+        let mut perm_chal = Vec::<F>::new();
+        for r in 0..(4 + vec_len) {
+            perm_chal.push(F::rand(&mut rng));
+        }
+
+        (Self {
+            t: no_pad_t,
+            a: no_pad_a,
+            i: 0,
+            has_stack: has_stack,
+            done: false,
+            perm_chal,
+            padding,
+            running_t_F: F::zero(),
+            running_a_F: F::zero(),
+        }, gen, blind)
     }
 
     pub(crate) fn get_t_a(&self) -> (&[MemElem<F>], &[MemElem<F>]) {

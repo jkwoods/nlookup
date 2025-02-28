@@ -5,16 +5,17 @@ use crate::bellpepper::ark_to_nova_field;
 use crate::memory::heckaton::RunningMem;
 use crate::utils::*;
 use ark_ff::PrimeField as arkPrimeField;
+use heckaton::MemElem;
 use nova_snark::provider::incremental::Incremental;
 
 // helper function for incremental commitment to RAM
 // batch_size == number of memory ops
 pub fn incr_commit_to_ram<A: arkPrimeField>(
     ic_scheme: &Incremental<E1, E2>,
-    ram: &RunningMem<A>,
+    t: &[MemElem<A>], 
+    a: &[MemElem<A>],
     batch_size: usize,
 ) -> (N2, Vec<N1>) {
-    let (t, a) = ram.get_t_a();
     assert!(t.len() % batch_size == 0); // assumes exact padding
     assert!(batch_size > 0);
     assert!(t.len() > 0);
