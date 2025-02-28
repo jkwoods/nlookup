@@ -317,7 +317,7 @@ impl<F: PrimeField> RunningMem<F> {
         }
     }
 
-    pub fn new_with_mem(
+    pub fn new_with_ic(
         mut t: Vec<MemElem<F>>,
         has_stack: bool,
         padding: MemElem<F>,
@@ -716,6 +716,33 @@ impl<F: PrimeField> StackRunningMem<F> {
             offsets: offsets.clone(),
             post_stack: false,
         }
+    }
+
+    pub fn new_with_ic(
+        mut t: Vec<MemElem<F>>,
+        padding: MemElem<F>, // what do you want to use for padding?
+        n_mems_usize: usize,
+        offsets: Vec<F>,
+        batch_size: usize, 
+        ic_scheme: &Incremental<E1, E2>
+    ) -> (Self, N2, Vec<N1>) {
+        let (running_mem, gen, blinds) = RunningMem::new_with_ic(t, true, padding, batch_size, ic_scheme);
+        assert!(n_mems_usize > 0);
+        assert_eq!(n_mems_usize, offsets.len());
+
+        // println!("A list {:#?}", a.clone());
+
+        let mut rng = test_rng();
+        let perm_chal = F::rand(&mut rng);
+
+        (Self {
+            running_mem: running_mem,
+            additional_perm_chal: perm_chal,
+            n_mems: F::from(n_mems_usize as u64),
+            n_mems_usize: n_mems_usize,
+            offsets: offsets.clone(),
+            post_stack: false,
+        }, gen, blinds)
     }
 
     fn t(&self) -> &MemElem<F> {
