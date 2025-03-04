@@ -312,8 +312,8 @@ impl<F: PrimeField> RunningMem<F> {
             done: false,
             perm_chal,
             padding,
-            running_t_F: F::zero(),
-            running_a_F: F::zero(),
+            running_t_F: F::one(),
+            running_a_F: F::one(),
         }
     }
 
@@ -361,8 +361,8 @@ impl<F: PrimeField> RunningMem<F> {
             done: false,
             perm_chal,
             padding,
-            running_t_F: F::zero(),
-            running_a_F: F::zero(),
+            running_t_F: F::one(),
+            running_a_F: F::one(),
         }, gen, blind)
     }
 
