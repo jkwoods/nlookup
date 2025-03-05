@@ -1,4 +1,4 @@
-use crate::{bellpepper::AllocIoVar, memory::incr_commit_to_ram, utils::*};
+use crate::{bellpepper::{AllocIoVar,ark_to_nova_field}, memory::incr_commit_to_ram, utils::*};
 use ark_ff::PrimeField;
 use ark_r1cs_std::{
     alloc::AllocVar,
@@ -323,7 +323,7 @@ impl<F: PrimeField> RunningMem<F> {
         padding: MemElem<F>,
         batch_size: usize, 
         ic_scheme: &Incremental<E1, E2>
-    ) -> (Self, N2, Vec<N1>) {
+    ) -> (Self, N2, Vec<N1>, (Vec<MemElem<F>>,Vec<MemElem<F>>)) {
         assert!(t.len() > 0);
 
         let vec_len = t[0].vals.len();
@@ -363,7 +363,7 @@ impl<F: PrimeField> RunningMem<F> {
             padding,
             running_t_F: F::one(),
             running_a_F: F::one(),
-        }, gen, blind)
+        }, gen, blind, (t, a_sort))
     }
 
     pub(crate) fn get_t_a(&self) -> (&[MemElem<F>], &[MemElem<F>]) {
@@ -725,8 +725,8 @@ impl<F: PrimeField> StackRunningMem<F> {
         offsets: Vec<F>,
         batch_size: usize, 
         ic_scheme: &Incremental<E1, E2>
-    ) -> (Self, N2, Vec<N1>) {
-        let (running_mem, gen, blinds) = RunningMem::new_with_ic(t, true, padding, batch_size, ic_scheme);
+    ) -> (Self, N2, Vec<N1>, Vec<N1>) {
+        let (running_mem, gen, blinds, (t_sort, a_sort)) = RunningMem::new_with_ic(t, true, padding, batch_size, ic_scheme);
         assert!(n_mems_usize > 0);
         assert_eq!(n_mems_usize, offsets.len());
 
@@ -735,6 +735,17 @@ impl<F: PrimeField> StackRunningMem<F> {
         let mut rng = test_rng();
         let perm_chal = F::rand(&mut rng);
 
+        let t_out: Vec<N1> = t_sort.iter().flat_map(|t_i| t_i.get_vec()).collect::<Vec<F>>().iter().map(|x| ark_to_nova_field::<F, N1>(x)).collect();
+
+        let a_out: Vec<N1> = a_sort.iter().flat_map(|a_i| a_i.get_vec()).collect::<Vec<F>>().iter().map(|x| ark_to_nova_field::<F, N1>(x)).collect();
+
+        let hints = t_out.chunks(6)
+        .zip(a_out.chunks(6)) 
+        .flat_map(|(a, b)| a.into_iter().chain(b)) 
+        .copied() 
+        .collect();
+
+ 
         (Self {
             running_mem: running_mem,
             additional_perm_chal: perm_chal,
@@ -742,7 +753,7 @@ impl<F: PrimeField> StackRunningMem<F> {
             n_mems_usize: n_mems_usize,
             offsets: offsets.clone(),
             post_stack: false,
-        }, gen, blinds)
+        }, gen, blinds, hints)
     }
 
     fn t(&self) -> &MemElem<F> {
