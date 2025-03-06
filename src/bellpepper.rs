@@ -89,9 +89,8 @@ impl<N: novaPrimeField<Repr = [u8; 32]>> FCircuit<N> {
     // the ark_cs should only have witness and input/output PAIRs
     // (i.e. a user should have never called new_input())
     pub fn new<A: arkPrimeField>(ark_cs_ref: ConstraintSystemRef<A>) -> Self {
-        ark_cs_ref.finalize();
-
         // println!("{:?}", ark_cs_ref);
+        ark_cs_ref.finalize();
         let ark_cs = ark_cs_ref.borrow().unwrap();
 
         // io pairs + constant
@@ -176,7 +175,7 @@ impl<N: novaPrimeField<Repr = [u8; 32]>> StepCircuit<N> for FCircuit<N> {
         // println!("_______________");
         // println!("{:?}", self);
 
-        // println!("z_in fc {:?}", z);
+        //        println!("z_in fc {:?}", z);
 
         // alloc outputs
         let mut alloc_out = Vec::new();
@@ -235,7 +234,7 @@ impl<N: novaPrimeField<Repr = [u8; 32]>> StepCircuit<N> for FCircuit<N> {
             cs.enforce(|| format!("con{}", i), |_| a_lc, |_| b_lc, |_| c_lc);
         }
 
-        // println!("z_out fc {:?}", alloc_out);
+        //      println!("z_out fc {:?}", alloc_out);
 
         Ok(alloc_out)
     }
@@ -405,11 +404,14 @@ mod tests {
             &circuit_secondary,
             &z0_primary,
             &[<E2 as Engine>::Scalar::ZERO],
+            None,
+            vec![],
         )
         .unwrap();
 
         for i in 0..num_steps {
-            let res = recursive_snark.prove_step(&pp, &circuit_primary, &circuit_secondary);
+            let res =
+                recursive_snark.prove_step(&pp, &circuit_primary, &circuit_secondary, None, vec![]);
             assert!(res.is_ok());
             res.unwrap();
             circuit_primary = make_ark_circuit(&zi_list[i + 1]);
@@ -522,6 +524,8 @@ mod tests {
             &circuit_secondary,
             &z0_primary,
             &[<E2 as Engine>::Scalar::zero()],
+            None,
+            vec![],
         )
         .unwrap();
 
@@ -530,7 +534,8 @@ mod tests {
             println!("round {:?}", i);
             circuit_primary = make_circuit_2(&zi_list[i], i);
 
-            let res = recursive_snark.prove_step(&pp, &circuit_primary, &circuit_secondary);
+            let res =
+                recursive_snark.prove_step(&pp, &circuit_primary, &circuit_secondary, None, vec![]);
             assert!(res.is_ok(), " res {:?}", res);
 
             let v_res =
