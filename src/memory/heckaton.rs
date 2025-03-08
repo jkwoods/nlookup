@@ -1,4 +1,8 @@
-use crate::{bellpepper::{AllocIoVar,ark_to_nova_field}, memory::incr_commit_to_ram, utils::*};
+use crate::{
+    bellpepper::{ark_to_nova_field, AllocIoVar},
+    memory::incr_commit_to_ram,
+    utils::*,
+};
 use ark_ff::PrimeField;
 use ark_r1cs_std::{
     alloc::AllocVar,
@@ -273,7 +277,7 @@ pub struct RunningMemWires<F: PrimeField> {
 impl<F: PrimeField> RunningMem<F> {
     // all t elements should have the same size val vectors
     //This filters out all entries with time and addr set to 0 as "padding"
-    //unfortunately you need those for the incemental memory but not for the circuit itself 
+    //unfortunately you need those for the incemental memory but not for the circuit itself
     pub fn new(
         mut t: Vec<MemElem<F>>,
         has_stack: bool,
@@ -315,55 +319,6 @@ impl<F: PrimeField> RunningMem<F> {
             running_t_F: F::one(),
             running_a_F: F::one(),
         }
-    }
-
-    pub fn new_with_ic(
-        mut t: Vec<MemElem<F>>,
-        has_stack: bool,
-        padding: MemElem<F>,
-        batch_size: usize, 
-        ic_scheme: &Incremental<E1, E2>
-    ) -> (Self, N2, Vec<N1>, (Vec<MemElem<F>>,Vec<MemElem<F>>)) {
-        assert!(t.len() > 0);
-
-        let vec_len = t[0].vals.len();
-        assert!(vec_len > 0);
-
-        t.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap());
-
-        let mut a_sort = t.clone();
-        a_sort.sort_by(|a, b| a.addr.partial_cmp(&b.addr).unwrap());
-
-        let (gen, blind) = incr_commit_to_ram(ic_scheme, &t, &a_sort, batch_size);
-
-        let no_pad_t: Vec<MemElem<F>> = t
-            .iter()
-            .filter(|&x| x.time != F::ZERO && x.addr != F::ZERO)
-            .cloned()
-            .collect();
-
-        let mut no_pad_a = no_pad_t.clone();
-        no_pad_a.sort_by(|a, b| a.addr.partial_cmp(&b.addr).unwrap());
-
-        // println!("A list {:#?}", a.clone());
-
-        let mut rng = test_rng();
-        let mut perm_chal = Vec::<F>::new();
-        for r in 0..(4 + vec_len) {
-            perm_chal.push(F::rand(&mut rng));
-        }
-
-        (Self {
-            t: no_pad_t,
-            a: no_pad_a,
-            i: 0,
-            has_stack: has_stack,
-            done: false,
-            perm_chal,
-            padding,
-            running_t_F: F::one(),
-            running_a_F: F::one(),
-        }, gen, blind, (t, a_sort))
     }
 
     pub(crate) fn get_t_a(&self) -> (&[MemElem<F>], &[MemElem<F>]) {
@@ -716,44 +671,6 @@ impl<F: PrimeField> StackRunningMem<F> {
             offsets: offsets.clone(),
             post_stack: false,
         }
-    }
-
-    pub fn new_with_ic(
-        mut t: Vec<MemElem<F>>,
-        padding: MemElem<F>, // what do you want to use for padding?
-        n_mems_usize: usize,
-        offsets: Vec<F>,
-        batch_size: usize, 
-        ic_scheme: &Incremental<E1, E2>
-    ) -> (Self, N2, Vec<N1>, Vec<N1>) {
-        let (running_mem, gen, blinds, (t_sort, a_sort)) = RunningMem::new_with_ic(t, true, padding, batch_size, ic_scheme);
-        assert!(n_mems_usize > 0);
-        assert_eq!(n_mems_usize, offsets.len());
-
-        // println!("A list {:#?}", a.clone());
-
-        let mut rng = test_rng();
-        let perm_chal = F::rand(&mut rng);
-
-        let t_out: Vec<N1> = t_sort.iter().flat_map(|t_i| t_i.get_vec()).collect::<Vec<F>>().iter().map(|x| ark_to_nova_field::<F, N1>(x)).collect();
-
-        let a_out: Vec<N1> = a_sort.iter().flat_map(|a_i| a_i.get_vec()).collect::<Vec<F>>().iter().map(|x| ark_to_nova_field::<F, N1>(x)).collect();
-
-        let hints = t_out.chunks(6)
-        .zip(a_out.chunks(6)) 
-        .flat_map(|(a, b)| a.into_iter().chain(b)) 
-        .copied() 
-        .collect();
-
- 
-        (Self {
-            running_mem: running_mem,
-            additional_perm_chal: perm_chal,
-            n_mems: F::from(n_mems_usize as u64),
-            n_mems_usize: n_mems_usize,
-            offsets: offsets.clone(),
-            post_stack: false,
-        }, gen, blinds, hints)
     }
 
     fn t(&self) -> &MemElem<F> {
