@@ -1,5 +1,6 @@
 pub mod hash_stack;
 pub mod heckaton;
+pub mod nebula;
 
 use crate::bellpepper::ark_to_nova_field;
 use crate::memory::heckaton::RunningMem;
