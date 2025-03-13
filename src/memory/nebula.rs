@@ -133,7 +133,7 @@ impl<F: PrimeField> MemBuilder<F> {
     }
 
     pub fn pad(&mut self) {
-        let padding = MemElem::new_f(0, 0, vec![F::ZERO; self.elem_len], false);
+        let padding = MemElem::new_u(0, 0, vec![0; self.elem_len], false);
 
         self.rs.push(padding.clone());
         self.ws.push(padding);
@@ -166,7 +166,12 @@ impl<F: PrimeField> MemBuilder<F> {
 
         self.ts += 1;
 
-        let write_elem = MemElem::new_f(self.ts, addr, read_elem.vals.clone(), is_ram);
+        let write_elem = MemElem::new_f(
+            F::from(self.ts as u64),
+            F::from(addr as u64),
+            read_elem.vals.clone(),
+            is_ram,
+        );
         self.ws.push(write_elem);
 
         read_elem.vals.clone()
@@ -178,15 +183,15 @@ impl<F: PrimeField> MemBuilder<F> {
         assert_eq!(vals.len(), self.elem_len, "Element not correct length");
         assert_ne!(addr, 0);
         if stack_tag.is_some() {
-            assert!(vals.iter().all(|v| v == F::ZERO));
+            assert!(vals.iter().all(|v| *v == F::ZERO));
             assert!(addr < self.stack_spaces[stack_tag.unwrap() + 1]);
             assert!(addr >= self.stack_spaces[stack_tag.unwrap()]);
         }
 
-        let elem = MemElem::new_f(F::ZERO, addr, vals, !stack_tag.is_some());
+        let elem = MemElem::new_f(F::ZERO, F::from(addr as u64), vals, !stack_tag.is_some());
         self.mem.insert(addr, elem.clone());
-        self.is.push(elem);
-        self.fs.insert(addr, elem.clone());
+        self.is.push(elem.clone());
+        self.fs.insert(addr, elem);
     }
 
     pub fn write(&mut self, addr: usize, vals: Vec<F>, is_ram: bool) {
@@ -194,15 +199,15 @@ impl<F: PrimeField> MemBuilder<F> {
         assert_ne!(addr, 0);
 
         let read_elem = if self.mem.contains_key(&addr) {
-            self.mem.get(addr).unwrap()
+            self.mem.get(&addr).unwrap()
         } else {
             panic!("Uninitialized memory addr")
         };
-        assert_eq!(read_elem.addr, addr);
-        self.rs.push(read_elem);
+        assert_eq!(read_elem.addr, F::from(addr as u64));
+        self.rs.push(read_elem.clone());
         self.ts += 1;
 
-        let write_elem = MemElem::new_f(self.time, read_elem.addr, vals, is_ram);
+        let write_elem = MemElem::new_f(F::from(self.ts as u64), read_elem.addr, vals, is_ram);
         self.mem.insert(addr, write_elem.clone());
         self.rs.push(write_elem.clone());
         self.fs.insert(addr, write_elem);
@@ -210,9 +215,9 @@ impl<F: PrimeField> MemBuilder<F> {
 
     // TODO return cmt
     // num iters = number of foldings
-    pub fn new_running_mem(&self, num_iters: usize) -> RunningMem<F> {
+    pub fn new_running_mem(&mut self, num_iters: usize) -> RunningMem<F> {
         // by address
-        let vec_fs: Vec<MemElem<F>> = self.fs.into_values().collect();
+        let mut vec_fs: Vec<MemElem<F>> = self.fs.clone().into_values().collect();
         vec_fs.sort_by(|a, b| a.addr.partial_cmp(&b.addr).unwrap());
 
         self.is.sort_by(|a, b| a.addr.partial_cmp(&b.addr).unwrap());
@@ -224,7 +229,7 @@ impl<F: PrimeField> MemBuilder<F> {
 
         let scan_per_batch = ((self.is.len() as f32) / (num_iters as f32)).ceil() as usize;
 
-        let padding = MemElem::new_f(0, 0, vec![F::ZERO; self.elem_len], false);
+        let padding = MemElem::new_u(0, 0, vec![0; self.elem_len], false);
 
         RunningMem {
             is: self.is,
@@ -283,20 +288,20 @@ impl<F: PrimeField> RunningMem<F> {
         let running_is = FpVar::new_witness(cs.clone(), || Ok(running_is))?;
         let running_rs = FpVar::new_witness(cs.clone(), || Ok(running_rs))?;
         let running_ws = FpVar::new_witness(cs.clone(), || Ok(running_ws))?;
-        let running_rs = FpVar::new_witness(cs.clone(), || Ok(running_fs))?;
-        let ts_m1 = FpVar::new_witness(cs.clone(), || Ok(self.ts))?;
-        let perm_chal = FpVar::new_constant(cs.clone(), || Ok(self.perm_chal))?;
+        let running_fs = FpVar::new_witness(cs.clone(), || Ok(running_fs))?;
+        let ts_m1 = FpVar::new_witness(cs.clone(), || Ok(F::from(self.ts as u64)))?;
+        let perm_chal = FpVar::new_constant(cs.clone(), self.perm_chal)?;
         let stack_ptrs = stack_ptrs
             .iter()
             .map(|sp| FpVar::new_witness(cs.clone(), || Ok(sp)))
-            .collect()?;
+            .collect::<Result<Vec<FpVar<F>>, _>>()?;
 
         Ok(RunningMemWires {
             cs: cs.clone(),
             running_is,
             running_rs,
             running_ws,
-            running_rs,
+            running_fs,
             ts_m1,
             perm_chal,
             stack_ptrs,
@@ -307,23 +312,28 @@ impl<F: PrimeField> RunningMem<F> {
         &mut self,
         cond: &Boolean<F>,
         stack_tag: usize, // which stack (0, 1, 2, etc)
-        vals: Vec<&FpVar<F>>,
+        vals: Vec<FpVar<F>>,
         w: &mut RunningMemWires<F>,
     ) -> Result<(MemElemWires<F>, MemElemWires<F>), SynthesisError> {
         assert!(self.stack_spaces.len() > 0);
         assert_eq!(w.stack_ptrs.len(), self.stack_spaces.len() + 1);
         assert!(stack_tag < self.stack_spaces.len());
 
-        let res = self.conditional_op(cond, &w.stack_ptrs[stack_tag], Some(vals), false, w);
+        let res = self.conditional_op(cond, &w.stack_ptrs[stack_tag].clone(), Some(vals), false, w);
 
         // sp ++
-        let sp = FpVar::new_witness(w.cs.clone(), || Ok(w.stack_ptrs[stack_tag].value()? + 1))?;
+        let sp = FpVar::new_witness(w.cs.clone(), || {
+            Ok(w.stack_ptrs[stack_tag].value()? + F::ONE)
+        })?;
         sp.conditional_enforce_equal(&(&w.stack_ptrs[stack_tag] + &FpVar::one()), &cond)?;
         w.stack_ptrs[stack_tag] = cond.select(&sp, &w.stack_ptrs[stack_tag])?;
 
         // boundry check
         w.stack_ptrs[stack_tag].conditional_enforce_not_equal(
-            &FpVar::new_constant(w.cs.clone(), || self.stack_spaces[stack_tag + 1]),
+            &FpVar::new_constant(
+                w.cs.clone(),
+                F::from((self.stack_spaces[stack_tag + 1]) as u64),
+            )?,
             cond,
         )?;
 
@@ -333,7 +343,7 @@ impl<F: PrimeField> RunningMem<F> {
     pub fn push(
         &mut self,
         stack_tag: usize, // which stack (0, 1, 2, etc)
-        vals: Vec<&FpVar<F>>,
+        vals: Vec<FpVar<F>>,
         w: &mut RunningMemWires<F>,
     ) -> Result<(MemElemWires<F>, MemElemWires<F>), SynthesisError> {
         self.conditional_push(&Boolean::TRUE, stack_tag, vals, w)
@@ -343,7 +353,7 @@ impl<F: PrimeField> RunningMem<F> {
         &mut self,
         cond: &Boolean<F>,
         addr: &FpVar<F>,
-        vals: Vec<&FpVar<F>>,
+        vals: Vec<FpVar<F>>,
         w: &mut RunningMemWires<F>,
     ) -> Result<(MemElemWires<F>, MemElemWires<F>), SynthesisError> {
         self.conditional_op(cond, addr, Some(vals), true, w)
@@ -352,7 +362,7 @@ impl<F: PrimeField> RunningMem<F> {
     pub fn write(
         &mut self,
         addr: &FpVar<F>,
-        vals: Vec<&FpVar<F>>,
+        vals: Vec<FpVar<F>>,
         w: &mut RunningMemWires<F>,
     ) -> Result<(MemElemWires<F>, MemElemWires<F>), SynthesisError> {
         self.conditional_write(&Boolean::TRUE, addr, vals, w)
@@ -369,15 +379,20 @@ impl<F: PrimeField> RunningMem<F> {
         assert!(stack_tag < self.stack_spaces.len());
 
         // sp --
-        let sp = FpVar::new_witness(w.cs.clone(), || Ok(w.stack_ptrs[stack_tag].value()? - 1))?;
+        let sp = FpVar::new_witness(w.cs.clone(), || {
+            Ok(w.stack_ptrs[stack_tag].value()? - F::ONE)
+        })?;
         sp.conditional_enforce_equal(&(&w.stack_ptrs[stack_tag] - &FpVar::one()), &cond)?;
         w.stack_ptrs[stack_tag] = cond.select(&sp, &w.stack_ptrs[stack_tag])?;
 
-        let res = self.conditional_op(cond, &w.stack_ptrs[stack_tag], None, false, w);
+        let res = self.conditional_op(cond, &w.stack_ptrs[stack_tag].clone(), None, false, w);
 
         // boundry check
         w.stack_ptrs[stack_tag].conditional_enforce_not_equal(
-            &FpVar::new_constant(w.cs.clone(), || Ok(self.stack_spaces[stack_tag] - 1))?,
+            &FpVar::new_constant(
+                w.cs.clone(),
+                F::from((self.stack_spaces[stack_tag] - 1) as u64),
+            )?,
             cond,
         )?;
 
@@ -413,12 +428,12 @@ impl<F: PrimeField> RunningMem<F> {
         &mut self,
         cond: &Boolean<F>,
         addr: &FpVar<F>,
-        write_vals: Option<Vec<&FpVar<F>>>,
+        write_vals: Option<Vec<FpVar<F>>>,
         is_ram: bool,
         w: &mut RunningMemWires<F>,
     ) -> Result<(MemElemWires<F>, MemElemWires<F>), SynthesisError> {
         // ts = ts + 1
-        let ts = FpVar::new_witness(w.cs.clone(), || Ok(w.ts_m1 + FpVar::one()))?;
+        let ts = FpVar::new_witness(w.cs.clone(), || Ok((&w.ts_m1 + &FpVar::one()).value()?))?;
         ts.conditional_enforce_equal(&(&w.ts_m1 + &FpVar::one()), &cond)?;
         w.ts_m1 = cond.select(&ts, &w.ts_m1)?;
 
@@ -430,7 +445,7 @@ impl<F: PrimeField> RunningMem<F> {
 
         let read_mem_elem = MemElemWires::new(
             FpVar::new_witness(w.cs.clone(), || Ok(read_wit.time))?,
-            addr,
+            addr.clone(),
             read_wit
                 .vals
                 .iter()
@@ -438,34 +453,38 @@ impl<F: PrimeField> RunningMem<F> {
                 .collect::<Result<Vec<FpVar<F>>, _>>()?,
             Boolean::new_witness(w.cs.clone(), || Ok(is_ram))?,
         );
-        let next_running_rs = w.running_rs * read_mem_elem.hash(w.cs.clone(), &w.perm_chal)?;
+        let next_running_rs = &w.running_rs * read_mem_elem.hash(w.cs.clone(), &w.perm_chal)?;
         w.running_rs = cond.select(&next_running_rs, &w.running_rs)?;
 
         // stack or ram
         read_mem_elem
             .sr
-            .conditional_enforce_equal(&Boolean::<F>::new_constant(w.cs.clone(), || is_ram)?, cond);
+            .conditional_enforce_equal(&Boolean::<F>::new_constant(w.cs.clone(), is_ram)?, cond);
 
         let v_prime = if write_vals.is_some() {
             let vals = write_vals.unwrap();
             assert_eq!(vals.len(), self.elem_len);
             vals
         } else {
-            read_mem_elem.vals
+            read_mem_elem.vals.clone()
         };
 
         self.mem_wits.insert(
             addr.value()?,
-            MemElem::new(
+            MemElem::new_f(
                 ts.value()?,
-                v_prime.iter().map(|v| v.value()).collect()?,
+                addr.value()?,
+                v_prime
+                    .iter()
+                    .map(|v| v.value())
+                    .collect::<Result<Vec<F>, _>>()?,
                 read_mem_elem.sr.value()?,
             ),
         );
 
         // WS = WS * tup
-        let write_mem_elem = MemElemWires::new(ts, addr, v_prime, read_mem_elem.sr);
-        let next_running_ws = w.running_ws * write_mem_elem.hash(w.cs.clone(), &w.perm_chal)?;
+        let write_mem_elem = MemElemWires::new(ts, addr.clone(), v_prime, read_mem_elem.sr.clone());
+        let next_running_ws = &w.running_ws * write_mem_elem.hash(w.cs.clone(), &w.perm_chal)?;
         w.running_ws = cond.select(&next_running_ws, &w.running_ws)?;
 
         Ok((read_mem_elem, write_mem_elem))
