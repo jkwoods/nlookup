@@ -100,17 +100,12 @@ impl<F: PrimeField> MemElemWires<F> {
         cs: ConstraintSystemRef<F>,
         perm_chal: &FpVar<F>,
     ) -> Result<FpVar<F>, SynthesisError> {
-        let mut perm_chals = vec![perm_chal.clone()];
-        for i in 0..(self.vals.len() + 2) {
-            perm_chals.push(&perm_chals[i] * perm_chal);
-        }
-
-        let mut hash = (&perm_chals[0] - &self.time)
-            * (&perm_chals[1] - &self.addr)
-            * (&perm_chals[2] - FpVar::from(self.sr.clone()));
+        let mut hash = (perm_chal - &self.time)
+            * (perm_chal - &self.addr)
+            * (perm_chal - FpVar::from(self.sr.clone()));
 
         for i in 0..self.vals.len() {
-            hash = hash * (&perm_chals[3 + i] - &self.vals[i]);
+            hash = hash * (perm_chal - &self.vals[i]);
         }
 
         Ok(hash)
@@ -252,12 +247,12 @@ impl<F: PrimeField> MemBuilder<F> {
         sep_final: bool, // true -> cmts/ivcify =  [is], [rs, ws], [fs]
         // false -> cmts/ivcify = [is], [rs, ws, fs]
         fs: &Vec<MemElem<F>>,
-    ) -> (Vec<N2>, Vec<Vec<N1>>, Vec<Vec<Vec<N1>>>) {
+    ) -> (Vec<N2>, Vec<Vec<N1>>, Vec<Vec<N1>>) {
         assert!((sep_final && ic_gen.len() == 3) || (!sep_final && ic_gen.len() == 2));
 
         let mut ci: Vec<Option<N2>> = vec![None; ic_gen.len()];
-        let mut blinds = vec![Vec::new(); ic_gen.len()];
-        let mut ram_hints = vec![Vec::new(); ic_gen.len()];
+        let mut blinds: Vec<Vec<N1>> = Vec::new();
+        let mut ram_hints = vec![Vec::new(); num_iters];
         for i in 0..num_iters {
             let mut hint = vec![Vec::new(); ic_gen.len()];
             let mut wits: Vec<Vec<N1>> = vec![Vec::new(); ic_gen.len()];
@@ -305,14 +300,16 @@ impl<F: PrimeField> MemBuilder<F> {
                     wits[1].extend(nova_fm);
                 }
             }
+            let mut ordered_hints = Vec::new();
 
             for j in 0..ic_gen.len() {
                 let (hash, blind) = ic_gen[j].commit(ci[j], &wits[j]);
                 ci[j] = Some(hash);
 
-                ram_hints[j].push(hint[j].clone());
-                blinds[j].push(blind);
+                blinds[i].push(blind);
+                ordered_hints.append(&mut hint[j]);
             }
+            ram_hints.push(ordered_hints);
         }
 
         let final_cmts = ci.iter().map(|c| c.unwrap()).collect();
@@ -330,7 +327,7 @@ impl<F: PrimeField> MemBuilder<F> {
         Vec<Incremental<E1, E2>>,
         Vec<N2>,
         Vec<Vec<N1>>,
-        Vec<Vec<Vec<N1>>>,
+        Vec<Vec<N1>>,
         RunningMem<F>,
     ) {
         assert_eq!(self.rs.len(), self.ws.len());
@@ -437,6 +434,26 @@ pub struct RunningMemWires<F: PrimeField> {
 }
 
 impl<F: PrimeField> RunningMem<F> {
+    pub fn get_dummy(&self) -> Self {
+        let mut mem_wits = self.mem_wits.clone();
+        for (_, elem) in mem_wits.iter_mut() {
+            *elem = self.padding.clone();
+        }
+
+        Self {
+            is: vec![self.padding.clone(); self.is.len()],
+            mem_wits,
+            fs: vec![self.padding.clone(); self.fs.len()],
+            ts: 0,
+            i: 0,
+            perm_chal: self.perm_chal,
+            elem_len: self.elem_len,
+            scan_per_batch: self.scan_per_batch,
+            stack_spaces: self.stack_spaces.clone(),
+            padding: self.padding.clone(),
+        }
+    }
+
     pub fn begin_new_circuit(
         &mut self,
         cs: ConstraintSystemRef<F>,
@@ -620,7 +637,7 @@ impl<F: PrimeField> RunningMem<F> {
         // stack or ram
         read_mem_elem
             .sr
-            .conditional_enforce_equal(&Boolean::<F>::new_constant(w.cs.clone(), is_ram)?, cond);
+            .conditional_enforce_equal(&Boolean::<F>::new_constant(w.cs.clone(), is_ram)?, cond)?;
 
         let v_prime = if write_vals.is_some() {
             let vals = write_vals.unwrap();
@@ -707,7 +724,7 @@ impl<F: PrimeField> RunningMem<F> {
             };
 
             // t < ts hack
-            initial_mem_elem.time.enforce_equal(&FpVar::zero());
+            initial_mem_elem.time.enforce_equal(&FpVar::zero())?;
 
             // IS check
             let next_running_is =
@@ -737,4 +754,355 @@ pub fn sample_challenge(ic_cmts: &Vec<N2>) -> N1 {
     }
 
     hasher.squeeze(250) // num hash bits from nova
+}
+
+mod tests {
+    use crate::bellpepper::*;
+    use crate::memory::nebula::*;
+    use crate::utils::*;
+    use ark_ff::{One, Zero};
+    use ark_r1cs_std::{
+        alloc::AllocVar, boolean::Boolean, eq::EqGadget, fields::fp::FpVar, R1CSVar,
+    };
+    use ark_relations::r1cs::{
+        ConstraintSystem, ConstraintSystemRef, OptimizationGoal, SynthesisError,
+    };
+    use ff::Field as novaField;
+    use ff::PrimeField as novaPrimeField;
+    use nova_snark::{
+        provider::hyrax_pc::HyraxPC,
+        traits::{circuit::TrivialCircuit, snark::default_ck_hint, Engine},
+        CompressedSNARK, PublicParams, RecursiveSNARK,
+    };
+
+    type A = ark_pallas::Fr;
+
+    type EE1 = nova_snark::provider::ipa_pc::EvaluationEngine<E1>;
+    type EE2 = nova_snark::provider::ipa_pc::EvaluationEngine<E2>;
+    type S1 = nova_snark::spartan::snark::RelaxedR1CSSNARK<E1, EE1>;
+    type S2 = nova_snark::spartan::snark::RelaxedR1CSSNARK<E2, EE2>;
+
+    fn make_full_mem_circ(
+        //        batch_size: usize, 2
+        i: usize,
+        rm: &mut RunningMem<A>,
+        do_rw_ops: fn(
+            usize,
+            &mut RunningMem<A>,
+            &mut RunningMemWires<A>,
+            &mut Vec<MemElemWires<A>>,
+        ),
+        running_is: &mut A,
+        running_rs: &mut A,
+        running_ws: &mut A,
+        running_fs: &mut A,
+    ) -> FCircuit<N1> {
+        let cs = ConstraintSystem::<A>::new_ref();
+        cs.set_optimization_goal(OptimizationGoal::Constraints);
+
+        // ram (we omit stack ptrs for this example)
+        let mut running_mem_wires = rm
+            .begin_new_circuit(
+                cs.clone(),
+                *running_is,
+                *running_rs,
+                *running_ws,
+                *running_fs,
+                vec![],
+            )
+            .unwrap();
+        let running_is_prev = running_mem_wires.running_is.clone();
+        let running_rs_prev = running_mem_wires.running_rs.clone();
+        let running_ws_prev = running_mem_wires.running_ws.clone();
+        let running_fs_prev = running_mem_wires.running_fs.clone();
+
+        let mut rw_mem_ops = Vec::new();
+
+        do_rw_ops(i, rm, &mut running_mem_wires, &mut rw_mem_ops);
+
+        let res = rm.scan(&mut running_mem_wires);
+        assert!(res.is_ok());
+        let (mut next_mem_ops, f) = res.unwrap();
+
+        next_mem_ops.extend(rw_mem_ops);
+        next_mem_ops.extend(f);
+
+        // doesn't matter what goes in anymore
+        ivcify_stack_op(&next_mem_ops, &next_mem_ops, cs.clone()).unwrap();
+
+        let (running_is_in, running_is_out) = FpVar::new_input_output_pair(
+            cs.clone(),
+            || Ok(running_is_prev.value().unwrap()),
+            || Ok(running_mem_wires.running_is.value().unwrap()),
+        )
+        .unwrap();
+        running_is_in.enforce_equal(&running_is_prev).unwrap();
+        running_is_out
+            .enforce_equal(&running_mem_wires.running_is)
+            .unwrap();
+
+        let (running_rs_in, running_rs_out) = FpVar::new_input_output_pair(
+            cs.clone(),
+            || Ok(running_rs_prev.value().unwrap()),
+            || Ok(running_mem_wires.running_rs.value().unwrap()),
+        )
+        .unwrap();
+        running_rs_in.enforce_equal(&running_rs_prev).unwrap();
+        running_rs_out
+            .enforce_equal(&running_mem_wires.running_rs)
+            .unwrap();
+
+        let (running_ws_in, running_ws_out) = FpVar::new_input_output_pair(
+            cs.clone(),
+            || Ok(running_ws_prev.value().unwrap()),
+            || Ok(running_mem_wires.running_ws.value().unwrap()),
+        )
+        .unwrap();
+        running_ws_in.enforce_equal(&running_ws_prev).unwrap();
+        running_ws_out
+            .enforce_equal(&running_mem_wires.running_ws)
+            .unwrap();
+
+        let (running_fs_in, running_fs_out) = FpVar::new_input_output_pair(
+            cs.clone(),
+            || Ok(running_fs_prev.value().unwrap()),
+            || Ok(running_mem_wires.running_fs.value().unwrap()),
+        )
+        .unwrap();
+        running_fs_in.enforce_equal(&running_fs_prev).unwrap();
+        running_fs_out
+            .enforce_equal(&running_mem_wires.running_fs)
+            .unwrap();
+
+        // running mem needs to be ivcified too, but that doesn't effect our final checks
+        // so we omit for now
+
+        *running_is = running_is_out.value().unwrap();
+        *running_rs = running_rs_out.value().unwrap();
+        *running_ws = running_ws_out.value().unwrap();
+        *running_fs = running_fs_out.value().unwrap();
+        FCircuit::new(cs)
+    }
+    pub fn ivcify_stack_op(
+        prev_ops: &Vec<MemElemWires<A>>,
+        next_ops: &Vec<MemElemWires<A>>,
+        cs: ConstraintSystemRef<A>,
+    ) -> Result<(), SynthesisError> {
+        assert_eq!(prev_ops.len(), next_ops.len());
+        //println!("ivc stack ops");
+        for i in 0..prev_ops.len() {
+            let (time_in, time_out) = FpVar::new_input_output_pair(
+                cs.clone(),
+                || Ok(prev_ops[i].time.value()?),
+                || Ok(next_ops[i].time.value()?),
+            )?;
+            //        prev_ops[i].time.enforce_equal(&time_in)?;
+            next_ops[i].time.enforce_equal(&time_out)?;
+            let (addr_in, addr_out) = FpVar::new_input_output_pair(
+                cs.clone(),
+                || Ok(prev_ops[i].addr.value()?),
+                || Ok(next_ops[i].addr.value()?),
+            )?;
+            //    prev_ops[i].addr.enforce_equal(&addr_in)?;
+            next_ops[i].addr.enforce_equal(&addr_out)?;
+
+            for j in 0..prev_ops[i].vals.len() {
+                let (val_j_in, val_j_out) = FpVar::new_input_output_pair(
+                    cs.clone(),
+                    || Ok(prev_ops[i].vals[j].value()?),
+                    || Ok(next_ops[i].vals[j].value()?),
+                )?;
+                //    prev_ops[i].vals[j].enforce_equal(&val_j_in)?;
+                next_ops[i].vals[j].enforce_equal(&val_j_out)?;
+            }
+            let (sr_in, sr_out) = Boolean::new_input_output_pair(
+                cs.clone(),
+                || Ok(prev_ops[i].sr.value()?),
+                || Ok(next_ops[i].sr.value()?),
+            )?;
+            //prev_ops[i].sr.enforce_equal(&sr_in)?;
+            next_ops[i].sr.enforce_equal(&sr_out)?;
+        }
+        Ok(())
+    }
+
+    // batch size hardcoded to 2 rn
+    fn run_ram_nl_nova(
+        num_iters: usize,
+        mem_builder: MemBuilder<A>,
+        do_rw_ops: fn(
+            usize,
+            &mut RunningMem<A>,
+            &mut RunningMemWires<A>,
+            &mut Vec<MemElemWires<A>>,
+        ),
+    ) {
+        let batch_size = 2;
+        let (ic_gens, C_final, blinds, ram_hints, mut rm) =
+            mem_builder.new_running_mem(batch_size, false);
+
+        // nova
+        let circuit_secondary = TrivialCircuit::default();
+        let mut running_is = A::one();
+        let mut running_rs = A::one();
+        let mut running_ws = A::one();
+        let mut running_fs = A::one();
+        let mut circuit_primary = make_full_mem_circ(
+            0,
+            &mut rm,
+            do_rw_ops,
+            &mut running_is,
+            &mut running_rs,
+            &mut running_ws,
+            &mut running_fs,
+        );
+
+        let z0_primary_full = circuit_primary.get_zi();
+        let z0_primary = z0_primary_full
+            [(batch_size * 2 * (3 + rm.elem_len) + rm.scan_per_batch * 2 * (3 + rm.elem_len))..]
+            .to_vec();
+
+        // produce public parameters
+        let pp = PublicParams::<
+            E1,
+            E2,
+            FCircuit<<E1 as Engine>::Scalar>,
+            TrivialCircuit<<E2 as Engine>::Scalar>,
+        >::setup(
+            &circuit_primary,
+            &circuit_secondary,
+            &*default_ck_hint(),
+            &*default_ck_hint(),
+            //rm.scan_per_batch * (3 + rm.elem_len),
+            batch_size * 2 * (3 + rm.elem_len) + rm.scan_per_batch * 2 * (3 + rm.elem_len),
+            &[&ic_gens[0].ped_gen, &ic_gens[1].ped_gen],
+        )
+        .unwrap();
+
+        // produce a recursive SNARK
+        let mut recursive_snark = RecursiveSNARK::<
+            E1,
+            E2,
+            FCircuit<<E1 as Engine>::Scalar>,
+            TrivialCircuit<<E2 as Engine>::Scalar>,
+        >::new(
+            &pp,
+            &circuit_primary,
+            &circuit_secondary,
+            &z0_primary,
+            &[<E2 as Engine>::Scalar::ZERO],
+            Some(blinds[0].clone()),
+            ram_hints[0].clone(),
+        )
+        .unwrap();
+
+        for i in 0..num_iters {
+            println!("==============================================");
+            let res = recursive_snark.prove_step(
+                &pp,
+                &circuit_primary,
+                &circuit_secondary,
+                Some(blinds[i].clone()),
+                ram_hints[i].clone(),
+            );
+            assert!(res.is_ok());
+            res.unwrap();
+
+            let zi_primary = circuit_primary.get_zi();
+            // verify the recursive SNARK
+            let res =
+                recursive_snark.verify(&pp, i + 1, &z0_primary, &[<E2 as Engine>::Scalar::ZERO]);
+            assert!(res.is_ok());
+
+            if i < num_iters - 1 {
+                circuit_primary = make_full_mem_circ(
+                    i + 1,
+                    &mut rm,
+                    do_rw_ops,
+                    &mut running_is,
+                    &mut running_rs,
+                    &mut running_ws,
+                    &mut running_fs,
+                );
+            }
+        }
+
+        // produce the prover and verifier keys for compressed snark
+        let (pk, vk) = CompressedSNARK::<_, _, _, _, S1, S2>::setup(&pp).unwrap();
+
+        // produce a compressed SNARK
+        let res = CompressedSNARK::<_, _, _, _, S1, S2>::prove(&pp, &pk, &recursive_snark);
+        assert!(res.is_ok());
+        let compressed_snark = res.unwrap();
+
+        // verify the compressed SNARK
+        let res =
+            compressed_snark.verify(&vk, num_iters, &z0_primary, &[<E2 as Engine>::Scalar::ZERO]);
+        assert!(res.is_ok());
+
+        // check final cmt outputs
+        let (zn, _) = res.unwrap();
+
+        // is * ws == rs * fs (verifier)
+        assert_eq!(zn[0] * zn[2], zn[1] * zn[4]);
+
+        // incr cmt = acc cmt (verifier)
+        for i in 0..C_final.len() {
+            assert_eq!(C_final[i], compressed_snark.Ci[i]);
+        }
+    }
+
+    #[test]
+    fn mem_basic() {
+        let mut mb = MemBuilder::new(2, vec![]);
+        mb.init(1, vec![A::from(10), A::from(11)], None);
+        mb.init(2, vec![A::from(12), A::from(13)], None);
+        mb.init(3, vec![A::from(14), A::from(15)], None);
+        mb.init(4, vec![A::from(16), A::from(17)], None);
+
+        assert_eq!(mb.read(1, true), vec![A::from(10), A::from(11)]);
+        mb.write(2, vec![A::from(18), A::from(19)], true);
+
+        assert_eq!(mb.read(3, true), vec![A::from(14), A::from(15)]);
+        mb.write(4, vec![A::from(20), A::from(21)], true);
+
+        run_ram_nl_nova(2, mb, mem_basic_circ);
+    }
+
+    fn mem_basic_circ(
+        i: usize,
+        rm: &mut RunningMem<A>,
+        rmw: &mut RunningMemWires<A>,
+        rw_mem_ops: &mut Vec<MemElemWires<A>>,
+    ) {
+        let (read_addr, write_addr, write_vals) = if i == 0 {
+            (1, 2, vec![18, 19])
+        } else if i == 1 {
+            (3, 4, vec![20, 21])
+        } else {
+            panic!()
+        };
+
+        let res = rm.read(
+            &FpVar::new_witness(rmw.cs.clone(), || Ok(A::from(read_addr as u64))).unwrap(),
+            rmw,
+        );
+        assert!(res.is_ok());
+        let (r, w) = res.unwrap();
+        rw_mem_ops.push(r);
+        rw_mem_ops.push(w);
+
+        let res = rm.write(
+            &FpVar::new_witness(rmw.cs.clone(), || Ok(A::from(write_addr))).unwrap(),
+            write_vals
+                .iter()
+                .map(|v| FpVar::new_witness(rmw.cs.clone(), || Ok(A::from(*v as u64))).unwrap())
+                .collect(),
+            rmw,
+        );
+        assert!(res.is_ok());
+        let (r, w) = res.unwrap();
+        rw_mem_ops.push(r);
+        rw_mem_ops.push(w);
+    }
 }
