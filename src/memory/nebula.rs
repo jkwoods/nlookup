@@ -1,4 +1,7 @@
+use crate::bellpepper::{ark_to_nova_field, nova_to_ark_field};
+use crate::utils::*;
 use ark_ff::PrimeField;
+use ark_ff::PrimeField as arkPrimeField;
 use ark_r1cs_std::{
     alloc::AllocVar,
     boolean::Boolean,
@@ -11,7 +14,10 @@ use ark_relations::{
     r1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisError, Variable},
 };
 use ark_std::test_rng;
-use nova_snark::provider::incremental::Incremental;
+use nova_snark::{
+    provider::incremental::Incremental,
+    traits::{Engine, ROConstants, ROTrait},
+};
 use std::collections::HashMap;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -49,6 +55,17 @@ impl<F: PrimeField> MemElem<F> {
             sr,
         }
     }
+
+    pub fn get_vec(&self) -> Vec<F> {
+        let mut v = vec![
+            self.time,
+            self.addr,
+            if self.sr { F::one() } else { F::zero() },
+        ];
+        v.extend(self.vals.clone());
+
+        v
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -83,7 +100,20 @@ impl<F: PrimeField> MemElemWires<F> {
         cs: ConstraintSystemRef<F>,
         perm_chal: &FpVar<F>,
     ) -> Result<FpVar<F>, SynthesisError> {
-        todo!()
+        let mut perm_chals = vec![perm_chal.clone()];
+        for i in 0..(self.vals.len() + 2) {
+            perm_chals.push(&perm_chals[i] * perm_chal);
+        }
+
+        let mut hash = (&perm_chals[0] - &self.time)
+            * (&perm_chals[1] - &self.addr)
+            * (&perm_chals[2] - FpVar::from(self.sr.clone()));
+
+        for i in 0..self.vals.len() {
+            hash = hash * (&perm_chals[3 + i] - &self.vals[i]);
+        }
+
+        Ok(hash)
     }
 }
 
@@ -213,36 +243,167 @@ impl<F: PrimeField> MemBuilder<F> {
         self.fs.insert(addr, write_elem);
     }
 
-    // TODO return cmt
-    // num iters = number of foldings
-    pub fn new_running_mem(&mut self, num_iters: usize) -> RunningMem<F> {
+    fn ic_to_ram(
+        &self,
+        ic_gen: &Vec<Incremental<E1, E2>>,
+        rw_batch_size: usize,
+        if_batch_size: usize,
+        num_iters: usize,
+        sep_final: bool, // true -> cmts/ivcify =  [is], [rs, ws], [fs]
+        // false -> cmts/ivcify = [is], [rs, ws, fs]
+        fs: &Vec<MemElem<F>>,
+    ) -> (Vec<N2>, Vec<Vec<N1>>, Vec<Vec<Vec<N1>>>) {
+        assert!((sep_final && ic_gen.len() == 3) || (!sep_final && ic_gen.len() == 2));
+
+        let mut ci: Vec<Option<N2>> = vec![None; ic_gen.len()];
+        let mut blinds = vec![Vec::new(); ic_gen.len()];
+        let mut ram_hints = vec![Vec::new(); ic_gen.len()];
+        for i in 0..num_iters {
+            let mut hint = vec![Vec::new(); ic_gen.len()];
+            let mut wits: Vec<Vec<N1>> = vec![Vec::new(); ic_gen.len()];
+            for (((im, rm), wm), fm) in self.is
+                [(i * if_batch_size)..(i * if_batch_size + if_batch_size)]
+                .iter()
+                .zip(self.rs[(i * rw_batch_size)..(i * rw_batch_size + rw_batch_size)].iter())
+                .zip(self.ws[(i * rw_batch_size)..(i * rw_batch_size + rw_batch_size)].iter())
+                .zip(fs[(i * if_batch_size)..(i * if_batch_size + if_batch_size)].iter())
+            {
+                let nova_im: Vec<N1> = im
+                    .get_vec()
+                    .iter()
+                    .map(|a| ark_to_nova_field::<F, N1>(a))
+                    .collect();
+                let nova_rm: Vec<N1> = rm
+                    .get_vec()
+                    .iter()
+                    .map(|a| ark_to_nova_field::<F, N1>(a))
+                    .collect();
+                let nova_wm: Vec<N1> = wm
+                    .get_vec()
+                    .iter()
+                    .map(|a| ark_to_nova_field::<F, N1>(a))
+                    .collect();
+                let nova_fm: Vec<N1> = fm
+                    .get_vec()
+                    .iter()
+                    .map(|a| ark_to_nova_field::<F, N1>(a))
+                    .collect();
+
+                hint[0].extend(nova_im.clone());
+                wits[0].extend(nova_im);
+
+                hint[1].extend(nova_rm.clone());
+                wits[1].extend(nova_rm);
+                hint[1].extend(nova_wm.clone());
+                wits[1].extend(nova_wm);
+
+                if sep_final {
+                    hint[2].extend(nova_fm.clone());
+                    wits[2].extend(nova_fm);
+                } else {
+                    hint[1].extend(nova_fm.clone());
+                    wits[1].extend(nova_fm);
+                }
+            }
+
+            for j in 0..ic_gen.len() {
+                let (hash, blind) = ic_gen[j].commit(ci[j], &wits[j]);
+                ci[j] = Some(hash);
+
+                ram_hints[j].push(hint[j].clone());
+                blinds[j].push(blind);
+            }
+        }
+
+        let final_cmts = ci.iter().map(|c| c.unwrap()).collect();
+
+        (final_cmts, blinds, ram_hints)
+    }
+
+    // consumes the mem builder object
+    pub fn new_running_mem(
+        mut self,
+        rw_batch_size: usize,
+        sep_final: bool, // true -> cmts/ivcify =  [is], [rs, ws], [fs]
+                         // false -> cmts/ivcify = [is], [rs, ws, fs]
+    ) -> (
+        Vec<Incremental<E1, E2>>,
+        Vec<N2>,
+        Vec<Vec<N1>>,
+        Vec<Vec<Vec<N1>>>,
+        RunningMem<F>,
+    ) {
+        assert_eq!(self.rs.len(), self.ws.len());
+        assert!(self.rs.len() > 0);
+        assert_eq!(self.rs.len() % rw_batch_size, 0); // assumes exact padding
+        assert!(rw_batch_size > 0);
+        let num_iters = self.rs.len() / rw_batch_size;
+
         // by address
         let mut vec_fs: Vec<MemElem<F>> = self.fs.clone().into_values().collect();
         vec_fs.sort_by(|a, b| a.addr.partial_cmp(&b.addr).unwrap());
 
         self.is.sort_by(|a, b| a.addr.partial_cmp(&b.addr).unwrap());
 
-        let mem_wits = todo!(); // TODO
+        let mem_wits = HashMap::new();
 
         assert_eq!(vec_fs.len(), self.is.len());
-        assert_eq!(self.rs.len(), self.ws.len());
 
         let scan_per_batch = ((self.is.len() as f32) / (num_iters as f32)).ceil() as usize;
 
         let padding = MemElem::new_u(0, 0, vec![0; self.elem_len], false);
 
-        RunningMem {
-            is: self.is,
-            mem_wits,
-            fs: vec_fs,
-            ts: self.ts,
-            i: 0,
-            perm_chal: todo!(),
-            elem_len: self.elem_len,
+        // cmt
+        let mut ic_gens = vec![Incremental::<E1, E2>::setup(
+            b"is ramcmt",
+            scan_per_batch * (3 + self.elem_len),
+        )];
+
+        if sep_final {
+            ic_gens.push(Incremental::<E1, E2>::setup(
+                b"rs ws ramcmt",
+                rw_batch_size * 2 * (3 + self.elem_len),
+            ));
+            ic_gens.push(Incremental::<E1, E2>::setup(
+                b"fs ramcmt",
+                scan_per_batch * (3 + self.elem_len),
+            ));
+        } else {
+            ic_gens.push(Incremental::<E1, E2>::setup(
+                b"rs ws fs ramcmt",
+                rw_batch_size * 2 * (3 + self.elem_len) + scan_per_batch * (3 + self.elem_len),
+            ));
+        }
+
+        let (ic_cmt, blinds, ram_hints) = self.ic_to_ram(
+            &ic_gens,
+            rw_batch_size,
             scan_per_batch,
-            stack_spaces: self.stack_spaces,
-            padding,
-        };
+            num_iters,
+            sep_final,
+            &vec_fs,
+        );
+
+        let perm_chal = nova_to_ark_field::<N1, F>(&sample_challenge(&ic_cmt));
+
+        (
+            ic_gens,
+            ic_cmt,
+            blinds,
+            ram_hints,
+            RunningMem {
+                is: self.is,
+                mem_wits,
+                fs: vec_fs,
+                ts: self.ts,
+                i: 0,
+                perm_chal,
+                elem_len: self.elem_len,
+                scan_per_batch,
+                stack_spaces: self.stack_spaces,
+                padding,
+            },
+        )
     }
 }
 
@@ -257,7 +418,7 @@ pub struct RunningMem<F: PrimeField> {
     elem_len: usize,
     scan_per_batch: usize,
     // if only ram, empty
-    // stacks = [0, stack_1_limit, stack_2_limit, ....]
+    // stacks = [1, stack_1_limit, stack_2_limit, ....]
     stack_spaces: Vec<usize>,
     padding: MemElem<F>,
 }
@@ -565,4 +726,15 @@ impl<F: PrimeField> RunningMem<F> {
 
         Ok((is_elems, fs_elems))
     }
+}
+
+// deterministic
+pub fn sample_challenge(ic_cmts: &Vec<N2>) -> N1 {
+    let ro_consts = ROConstants::<E1>::default();
+    let mut hasher = <E1 as Engine>::RO::new(ro_consts, ic_cmts.len());
+    for c in ic_cmts {
+        hasher.absorb(*c);
+    }
+
+    hasher.squeeze(250) // num hash bits from nova
 }

@@ -1,6 +1,5 @@
 use crate::{
     bellpepper::{ark_to_nova_field, AllocIoVar},
-    memory::incr_commit_to_ram,
     utils::*,
 };
 use ark_ff::PrimeField;
@@ -16,7 +15,6 @@ use ark_relations::{
     r1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisError, Variable},
 };
 use ark_std::test_rng;
-use nova_snark::provider::incremental::Incremental;
 use std::collections::HashMap;
 
 #[derive(Clone, Debug, PartialEq)]
