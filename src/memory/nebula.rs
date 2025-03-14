@@ -95,6 +95,23 @@ impl<F: PrimeField> MemElemWires<F> {
         assert_eq!(self.sr.value().unwrap(), (*m).sr);
     }
 
+    pub fn print_vals(&self) {
+        println!(
+            "MemElem [{:#?} [time {:#?}] [addr {:#?}] [vals {:#?}]]",
+            if self.sr.value().unwrap() {
+                "STACK"
+            } else {
+                "RAM"
+            },
+            self.time.value().unwrap(),
+            self.addr.value().unwrap(),
+            self.vals
+                .iter()
+                .map(|v| v.value().unwrap())
+                .collect::<Vec<F>>()
+        );
+    }
+
     pub fn hash(
         &self,
         cs: ConstraintSystemRef<F>,
@@ -180,7 +197,7 @@ impl<F: PrimeField> MemBuilder<F> {
         self.read(self.stack_ptrs[stack_tag], false)
     }
 
-    pub fn read(&mut self, addr: usize, is_ram: bool) -> Vec<F> {
+    pub fn read(&mut self, addr: usize, is_stack: bool) -> Vec<F> {
         let read_elem = if self.mem.contains_key(&addr) {
             self.mem.get(&addr).unwrap()
         } else {
@@ -195,7 +212,7 @@ impl<F: PrimeField> MemBuilder<F> {
             F::from(self.ts as u64),
             F::from(addr as u64),
             read_elem.vals.clone(),
-            is_ram,
+            is_stack,
         );
         self.ws.push(write_elem);
 
@@ -219,7 +236,7 @@ impl<F: PrimeField> MemBuilder<F> {
         self.fs.insert(addr, elem);
     }
 
-    pub fn write(&mut self, addr: usize, vals: Vec<F>, is_ram: bool) {
+    pub fn write(&mut self, addr: usize, vals: Vec<F>, is_stack: bool) {
         assert_eq!(vals.len(), self.elem_len, "Element not correct length");
         assert_ne!(addr, 0);
 
@@ -232,9 +249,9 @@ impl<F: PrimeField> MemBuilder<F> {
         self.rs.push(read_elem.clone());
         self.ts += 1;
 
-        let write_elem = MemElem::new_f(F::from(self.ts as u64), read_elem.addr, vals, is_ram);
+        let write_elem = MemElem::new_f(F::from(self.ts as u64), read_elem.addr, vals, is_stack);
         self.mem.insert(addr, write_elem.clone());
-        self.rs.push(write_elem.clone());
+        self.ws.push(write_elem.clone());
         self.fs.insert(addr, write_elem);
     }
 
@@ -251,7 +268,7 @@ impl<F: PrimeField> MemBuilder<F> {
         assert!((sep_final && ic_gen.len() == 3) || (!sep_final && ic_gen.len() == 2));
 
         let mut ci: Vec<Option<N2>> = vec![None; ic_gen.len()];
-        let mut blinds: Vec<Vec<N1>> = Vec::new();
+        let mut blinds: Vec<Vec<N1>> = vec![Vec::new(); ic_gen.len()];
         let mut ram_hints = vec![Vec::new(); num_iters];
         for i in 0..num_iters {
             let mut hint = vec![Vec::new(); ic_gen.len()];
@@ -342,7 +359,10 @@ impl<F: PrimeField> MemBuilder<F> {
 
         self.is.sort_by(|a, b| a.addr.partial_cmp(&b.addr).unwrap());
 
-        let mem_wits = HashMap::new();
+        let mut mem_wits = HashMap::new();
+        for elem in &self.is {
+            mem_wits.insert(elem.addr, elem.clone());
+        }
 
         assert_eq!(vec_fs.len(), self.is.len());
 
@@ -607,7 +627,7 @@ impl<F: PrimeField> RunningMem<F> {
         cond: &Boolean<F>,
         addr: &FpVar<F>,
         write_vals: Option<Vec<FpVar<F>>>,
-        is_ram: bool,
+        is_stack: bool,
         w: &mut RunningMemWires<F>,
     ) -> Result<(MemElemWires<F>, MemElemWires<F>), SynthesisError> {
         // ts = ts + 1
@@ -629,15 +649,16 @@ impl<F: PrimeField> RunningMem<F> {
                 .iter()
                 .map(|v| FpVar::new_witness(w.cs.clone(), || Ok(v)))
                 .collect::<Result<Vec<FpVar<F>>, _>>()?,
-            Boolean::new_witness(w.cs.clone(), || Ok(is_ram))?,
+            Boolean::new_witness(w.cs.clone(), || Ok(is_stack))?,
         );
         let next_running_rs = &w.running_rs * read_mem_elem.hash(w.cs.clone(), &w.perm_chal)?;
         w.running_rs = cond.select(&next_running_rs, &w.running_rs)?;
 
         // stack or ram
-        read_mem_elem
-            .sr
-            .conditional_enforce_equal(&Boolean::<F>::new_constant(w.cs.clone(), is_ram)?, cond)?;
+        read_mem_elem.sr.conditional_enforce_equal(
+            &Boolean::<F>::new_constant(w.cs.clone(), is_stack)?,
+            cond,
+        )?;
 
         let v_prime = if write_vals.is_some() {
             let vals = write_vals.unwrap();
@@ -827,6 +848,10 @@ mod tests {
         next_mem_ops.extend(rw_mem_ops);
         next_mem_ops.extend(f);
 
+        for mo in &next_mem_ops {
+            println!("{:#?}", mo.print_vals());
+        }
+
         // doesn't matter what goes in anymore
         ivcify_stack_op(&next_mem_ops, &next_mem_ops, cs.clone()).unwrap();
 
@@ -889,7 +914,6 @@ mod tests {
         cs: ConstraintSystemRef<A>,
     ) -> Result<(), SynthesisError> {
         assert_eq!(prev_ops.len(), next_ops.len());
-        //println!("ivc stack ops");
         for i in 0..prev_ops.len() {
             let (time_in, time_out) = FpVar::new_input_output_pair(
                 cs.clone(),
@@ -927,7 +951,7 @@ mod tests {
     }
 
     // batch size hardcoded to 2 rn
-    fn run_ram_nl_nova(
+    fn run_ram_nova(
         num_iters: usize,
         mem_builder: MemBuilder<A>,
         do_rw_ops: fn(
@@ -1061,12 +1085,12 @@ mod tests {
         mb.init(4, vec![A::from(16), A::from(17)], None);
 
         assert_eq!(mb.read(1, true), vec![A::from(10), A::from(11)]);
-        mb.write(2, vec![A::from(18), A::from(19)], true);
+        mb.write(2, vec![A::from(18), A::from(19)], false);
 
         assert_eq!(mb.read(3, true), vec![A::from(14), A::from(15)]);
-        mb.write(4, vec![A::from(20), A::from(21)], true);
+        mb.write(4, vec![A::from(20), A::from(21)], false);
 
-        run_ram_nl_nova(2, mb, mem_basic_circ);
+        run_ram_nova(2, mb, mem_basic_circ);
     }
 
     fn mem_basic_circ(
