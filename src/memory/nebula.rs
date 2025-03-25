@@ -321,6 +321,8 @@ impl<F: PrimeField> MemBuilder<F> {
 
             let ifb = if_batch_size * (3 + self.elem_len);
             let rwb = rw_batch_size * (3 + self.elem_len);
+            println!("ifb {}, rwb {}", ifb, rwb);
+
             let hint_ranges = if sep_final {
                 vec![
                     0..ifb,
@@ -330,6 +332,11 @@ impl<F: PrimeField> MemBuilder<F> {
             } else {
                 vec![0..ifb, ifb..(ifb * 2 + rwb * 2)]
             };
+            print!(
+                "ordered_hints len {}, ranges {:#?}",
+                ordered_hints.len(),
+                hint_ranges
+            );
 
             for (j, range) in hint_ranges.into_iter().enumerate() {
                 let (hash, blind) = ic_gen[j].commit(ci[j], &ordered_hints[range]);
@@ -364,6 +371,7 @@ impl<F: PrimeField> MemBuilder<F> {
         assert_eq!(self.rs.len() % rw_batch_size, 0); // assumes exact padding
         assert!(rw_batch_size > 0);
         let num_iters = self.rs.len() / rw_batch_size;
+        println!("num iters {}", num_iters);
 
         // by address
         let mut vec_fs: Vec<MemElem<F>> = self.fs.clone().into_values().collect();
@@ -378,6 +386,7 @@ impl<F: PrimeField> MemBuilder<F> {
         assert_eq!(vec_fs.len(), self.is.len());
 
         let scan_per_batch = ((self.is.len() as f32) / (num_iters as f32)).ceil() as usize;
+        println!("scan per batch {}", scan_per_batch);
 
         let padding = MemElem::new_u(0, 0, vec![0; self.elem_len], false);
 
@@ -442,7 +451,7 @@ pub struct RunningMem<F: PrimeField> {
     i: usize, // for is/fs
     perm_chal: F,
     elem_len: usize,
-    scan_per_batch: usize,
+    pub scan_per_batch: usize,
     // if only ram, empty
     // stacks = [1, stack_1_limit, stack_2_limit, ....]
     stack_spaces: Vec<usize>,
@@ -987,9 +996,9 @@ mod tests {
         Ok(())
     }
 
-    // batch size hardcoded to 2 rn
     fn run_ram_nova(
         num_iters: usize,
+        batch_size: usize,
         mem_builder: MemBuilder<A>,
         do_rw_ops: fn(
             usize,
@@ -998,7 +1007,6 @@ mod tests {
             &mut Vec<MemElemWires<A>>,
         ),
     ) {
-        let batch_size = 2;
         let (ic_gens, C_final, blinds, ram_hints, mut rm) =
             mem_builder.new_running_mem(batch_size, false);
 
@@ -1131,7 +1139,7 @@ mod tests {
         assert_eq!(mb.read(3, false), vec![A::from(14), A::from(15)]);
         mb.write(4, vec![A::from(20), A::from(21)], false);
 
-        run_ram_nova(2, mb, mem_basic_circ);
+        run_ram_nova(2, 2, mb, mem_basic_circ);
     }
 
     fn mem_basic_circ(
@@ -1156,6 +1164,48 @@ mod tests {
         let (r, w) = res.unwrap();
         rw_mem_ops.push(r);
         rw_mem_ops.push(w);
+
+        let res = rm.write(
+            &FpVar::new_witness(rmw.cs.clone(), || Ok(A::from(write_addr))).unwrap(),
+            write_vals
+                .iter()
+                .map(|v| FpVar::new_witness(rmw.cs.clone(), || Ok(A::from(*v as u64))).unwrap())
+                .collect(),
+            rmw,
+        );
+        assert!(res.is_ok());
+        let (r, w) = res.unwrap();
+        rw_mem_ops.push(r);
+        rw_mem_ops.push(w);
+    }
+
+    #[test]
+    fn mem_bigger_init() {
+        let mut mb = MemBuilder::new(2, vec![]);
+        mb.init(1, vec![A::from(10), A::from(11)], None);
+        mb.init(2, vec![A::from(12), A::from(13)], None);
+        mb.init(3, vec![A::from(14), A::from(15)], None);
+        mb.init(4, vec![A::from(16), A::from(17)], None);
+
+        mb.write(1, vec![A::from(18), A::from(19)], false);
+        mb.write(2, vec![A::from(20), A::from(21)], false);
+
+        run_ram_nova(2, 1, mb, mem_bigger_init_circ);
+    }
+
+    fn mem_bigger_init_circ(
+        i: usize,
+        rm: &mut RunningMem<A>,
+        rmw: &mut RunningMemWires<A>,
+        rw_mem_ops: &mut Vec<MemElemWires<A>>,
+    ) {
+        let (write_addr, write_vals) = if i == 0 {
+            (1, vec![18, 19])
+        } else if i == 1 {
+            (2, vec![20, 21])
+        } else {
+            panic!()
+        };
 
         let res = rm.write(
             &FpVar::new_witness(rmw.cs.clone(), || Ok(A::from(write_addr))).unwrap(),
