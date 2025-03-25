@@ -270,10 +270,18 @@ impl<F: PrimeField> MemBuilder<F> {
 
         let mut ci: Vec<Option<N2>> = vec![None; ic_gen.len()];
         let mut blinds: Vec<Vec<N1>> = vec![Vec::new(); ic_gen.len()];
-        let mut ram_hints = vec![Vec::new(); num_iters];
+        let mut ram_hints = Vec::new();
+
+        println!(
+            "ic to ram: IS {:#?} RS {:#?} WS {:#?} FS {:#?}",
+            self.is, self.rs, self.ws, fs
+        );
+
         for i in 0..num_iters {
-            let mut hint = vec![Vec::new(); ic_gen.len()];
-            let mut wits: Vec<Vec<N1>> = vec![Vec::new(); ic_gen.len()];
+            let mut is_hint = Vec::new();
+            let mut rs_ws_hint = Vec::new();
+            let mut fs_hint = Vec::new();
+            //let mut wits: Vec<Vec<N1>> = vec![Vec::new(); ic_gen.len()];
             for (((im, rm), wm), fm) in self.is
                 [(i * if_batch_size)..(i * if_batch_size + if_batch_size)]
                 .iter()
@@ -302,31 +310,34 @@ impl<F: PrimeField> MemBuilder<F> {
                     .map(|a| ark_to_nova_field::<F, N1>(a))
                     .collect();
 
-                hint[0].extend(nova_im.clone());
-                wits[0].extend(nova_im);
-
-                hint[1].extend(nova_rm.clone());
-                wits[1].extend(nova_rm);
-                hint[1].extend(nova_wm.clone());
-                wits[1].extend(nova_wm);
-
-                if sep_final {
-                    hint[2].extend(nova_fm.clone());
-                    wits[2].extend(nova_fm);
-                } else {
-                    hint[1].extend(nova_fm.clone());
-                    wits[1].extend(nova_fm);
-                }
+                is_hint.extend(nova_im);
+                rs_ws_hint.extend(nova_rm);
+                rs_ws_hint.extend(nova_wm);
+                fs_hint.extend(nova_fm);
             }
-            let mut ordered_hints = Vec::new();
+            let mut ordered_hints = is_hint;
+            ordered_hints.extend(rs_ws_hint);
+            ordered_hints.extend(fs_hint);
 
-            for j in 0..ic_gen.len() {
-                let (hash, blind) = ic_gen[j].commit(ci[j], &wits[j]);
+            let ifb = if_batch_size * (3 + self.elem_len);
+            let rwb = rw_batch_size * (3 + self.elem_len);
+            let hint_ranges = if sep_final {
+                vec![
+                    0..ifb,
+                    ifb..(ifb + rwb * 2),
+                    (ifb + rwb * 2)..(ifb * 2 + rwb * 2),
+                ]
+            } else {
+                vec![0..ifb, ifb..(ifb * 2 + rwb * 2)]
+            };
+
+            for (j, range) in hint_ranges.into_iter().enumerate() {
+                let (hash, blind) = ic_gen[j].commit(ci[j], &ordered_hints[range]);
                 ci[j] = Some(hash);
 
                 blinds[i].push(blind);
-                ordered_hints.append(&mut hint[j]);
             }
+            println!("ordered hints {} {:#?}", i, ordered_hints.clone());
             ram_hints.push(ordered_hints);
         }
 
@@ -371,25 +382,20 @@ impl<F: PrimeField> MemBuilder<F> {
         let padding = MemElem::new_u(0, 0, vec![0; self.elem_len], false);
 
         // cmt
-        let mut ic_gens = vec![Incremental::<E1, E2>::setup(
-            b"is ramcmt",
-            scan_per_batch * (3 + self.elem_len),
-        )];
+        let mut big_gens = Incremental::<E1, E2>::setup(
+            b"ramcmt",
+            scan_per_batch * 2 * (3 + self.elem_len) + rw_batch_size * 2 * (3 + self.elem_len),
+        );
+        let (is_gens, big_gens) = big_gens.split_at(scan_per_batch * (3 + self.elem_len));
+
+        let mut ic_gens = vec![is_gens];
 
         if sep_final {
-            ic_gens.push(Incremental::<E1, E2>::setup(
-                b"rs ws ramcmt",
-                rw_batch_size * 2 * (3 + self.elem_len),
-            ));
-            ic_gens.push(Incremental::<E1, E2>::setup(
-                b"fs ramcmt",
-                scan_per_batch * (3 + self.elem_len),
-            ));
+            let (rw_gens, big_gens) = big_gens.split_at(rw_batch_size * 2 * (3 + self.elem_len));
+            ic_gens.push(rw_gens);
+            ic_gens.push(big_gens);
         } else {
-            ic_gens.push(Incremental::<E1, E2>::setup(
-                b"rs ws fs ramcmt",
-                rw_batch_size * 2 * (3 + self.elem_len) + scan_per_batch * (3 + self.elem_len),
-            ));
+            ic_gens.push(big_gens);
         }
 
         let (ic_cmt, blinds, ram_hints) = self.ic_to_ram(
@@ -400,6 +406,8 @@ impl<F: PrimeField> MemBuilder<F> {
             sep_final,
             &vec_fs,
         );
+
+        println!("RAM HINTS {:#?}", ram_hints.clone());
 
         let perm_chal = nova_to_ark_field::<N1, F>(&sample_challenge(&ic_cmt));
         println!("scan per batch {}", scan_per_batch);
@@ -413,7 +421,7 @@ impl<F: PrimeField> MemBuilder<F> {
                 is: self.is,
                 mem_wits,
                 fs: vec_fs,
-                ts: 0,
+                ts: F::zero(),
                 i: 0,
                 perm_chal,
                 elem_len: self.elem_len,
@@ -430,7 +438,7 @@ pub struct RunningMem<F: PrimeField> {
     is: Vec<MemElem<F>>,
     mem_wits: HashMap<F, MemElem<F>>,
     fs: Vec<MemElem<F>>,
-    ts: usize,
+    ts: F,
     i: usize, // for is/fs
     perm_chal: F,
     elem_len: usize,
@@ -465,7 +473,7 @@ impl<F: PrimeField> RunningMem<F> {
             is: vec![self.padding.clone(); self.is.len()],
             mem_wits,
             fs: vec![self.padding.clone(); self.fs.len()],
-            ts: 0,
+            ts: F::zero(),
             i: 0,
             perm_chal: self.perm_chal,
             elem_len: self.elem_len,
@@ -488,7 +496,7 @@ impl<F: PrimeField> RunningMem<F> {
         let running_rs = FpVar::new_witness(cs.clone(), || Ok(running_rs))?;
         let running_ws = FpVar::new_witness(cs.clone(), || Ok(running_ws))?;
         let running_fs = FpVar::new_witness(cs.clone(), || Ok(running_fs))?;
-        let ts_m1 = FpVar::new_witness(cs.clone(), || Ok(F::from(self.ts as u64)))?;
+        let ts_m1 = FpVar::new_witness(cs.clone(), || Ok(self.ts))?;
         let perm_chal = FpVar::new_constant(cs.clone(), self.perm_chal)?;
         let stack_ptrs = stack_ptrs
             .iter()
@@ -635,6 +643,7 @@ impl<F: PrimeField> RunningMem<F> {
         let ts = FpVar::new_witness(w.cs.clone(), || Ok((&w.ts_m1 + &FpVar::one()).value()?))?;
         ts.conditional_enforce_equal(&(&w.ts_m1 + &FpVar::one()), &cond)?;
         w.ts_m1 = cond.select(&ts, &w.ts_m1)?;
+        self.ts = w.ts_m1.value()?;
 
         // t < ts hack
 
@@ -932,7 +941,14 @@ mod tests {
         cs: ConstraintSystemRef<A>,
     ) -> Result<(), SynthesisError> {
         assert_eq!(prev_ops.len(), next_ops.len());
+
         for i in 0..prev_ops.len() {
+            println!(
+                "next in ivc {:#?}, {:#?}",
+                next_ops[i].time.value()?,
+                next_ops[i].addr.value()?
+            );
+
             let (time_in, time_out) = FpVar::new_input_output_pair(
                 cs.clone(),
                 || Ok(prev_ops[i].time.value()?),
@@ -948,7 +964,17 @@ mod tests {
             //    prev_ops[i].addr.enforce_equal(&addr_in)?;
             next_ops[i].addr.enforce_equal(&addr_out)?;
 
+            println!("{:#?}", next_ops[i].sr.value()?);
+            let (sr_in, sr_out) = Boolean::new_input_output_pair(
+                cs.clone(),
+                || Ok(prev_ops[i].sr.value()?),
+                || Ok(next_ops[i].sr.value()?),
+            )?;
+            //prev_ops[i].sr.enforce_equal(&sr_in)?;
+            next_ops[i].sr.enforce_equal(&sr_out)?;
+
             for j in 0..prev_ops[i].vals.len() {
+                println!("{:#?}", next_ops[i].vals[j].value()?);
                 let (val_j_in, val_j_out) = FpVar::new_input_output_pair(
                     cs.clone(),
                     || Ok(prev_ops[i].vals[j].value()?),
@@ -957,13 +983,6 @@ mod tests {
                 //    prev_ops[i].vals[j].enforce_equal(&val_j_in)?;
                 next_ops[i].vals[j].enforce_equal(&val_j_out)?;
             }
-            let (sr_in, sr_out) = Boolean::new_input_output_pair(
-                cs.clone(),
-                || Ok(prev_ops[i].sr.value()?),
-                || Ok(next_ops[i].sr.value()?),
-            )?;
-            //prev_ops[i].sr.enforce_equal(&sr_in)?;
-            next_ops[i].sr.enforce_equal(&sr_out)?;
         }
         Ok(())
     }
@@ -1016,7 +1035,10 @@ mod tests {
             &*default_ck_hint(),
             &*default_ck_hint(),
             //rm.scan_per_batch * (3 + rm.elem_len),
-            batch_size * 2 * (3 + rm.elem_len) + rm.scan_per_batch * 2 * (3 + rm.elem_len),
+            vec![
+                rm.scan_per_batch * (3 + rm.elem_len),
+                batch_size * 2 * (3 + rm.elem_len) + rm.scan_per_batch * (3 + rm.elem_len),
+            ],
             &[&ic_gens[0].ped_gen, &ic_gens[1].ped_gen],
         )
         .unwrap();
@@ -1086,10 +1108,11 @@ mod tests {
         let (zn, _) = res.unwrap();
 
         // is * ws == rs * fs (verifier)
-        assert_eq!(zn[0] * zn[2], zn[1] * zn[4]);
+        assert_eq!(zn[0] * zn[2], zn[1] * zn[3]);
 
         // incr cmt = acc cmt (verifier)
         for i in 0..C_final.len() {
+            println!("{}", i);
             assert_eq!(C_final[i], compressed_snark.Ci[i]);
         }
     }

@@ -387,7 +387,7 @@ mod tests {
             &circuit_secondary,
             &*default_ck_hint(),
             &*default_ck_hint(),
-            0,
+            vec![],
             &[],
         )
         .unwrap();
@@ -507,7 +507,7 @@ mod tests {
             &circuit_secondary,
             &*default_ck_hint(),
             &*default_ck_hint(),
-            0,
+            vec![],
             &[],
         )
         .unwrap();
