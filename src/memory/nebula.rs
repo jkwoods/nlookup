@@ -192,7 +192,7 @@ impl<F: PrimeField> MemBuilder<F> {
     pub fn pop(&mut self, stack_tag: usize) -> Vec<F> {
         self.stack_ptrs[stack_tag] -= 1;
 
-        assert!(self.stack_ptrs[stack_tag] >= self.stack_spaces[stack_tag - 1]);
+        assert!(self.stack_ptrs[stack_tag] >= self.stack_spaces[stack_tag]);
 
         self.read(self.stack_ptrs[stack_tag], true)
     }
@@ -605,10 +605,7 @@ impl<F: PrimeField> RunningMem<F> {
 
         // boundry check
         w.stack_ptrs[stack_tag].conditional_enforce_not_equal(
-            &FpVar::new_constant(
-                w.cs.clone(),
-                F::from((self.stack_spaces[stack_tag] - 1) as u64),
-            )?,
+            &FpVar::new_constant(w.cs.clone(), F::from(self.stack_spaces[stack_tag] as u64))?,
             cond,
         )?;
 
