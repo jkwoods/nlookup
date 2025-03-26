@@ -270,7 +270,7 @@ impl<F: PrimeField> MemBuilder<F> {
         assert!((sep_final && ic_gen.len() == 3) || (!sep_final && ic_gen.len() == 2));
 
         let mut ci: Vec<Option<N2>> = vec![None; ic_gen.len()];
-        let mut blinds: Vec<Vec<N1>> = vec![Vec::new(); ic_gen.len()];
+        let mut blinds: Vec<Vec<N1>> = vec![Vec::new(); num_iters];
         let mut ram_hints = Vec::new();
 
         println!(
@@ -1131,6 +1131,66 @@ mod tests {
             println!("{}", i);
             assert_eq!(C_final[i], compressed_snark.Ci[i]);
         }
+    }
+
+    #[test]
+    fn stack_basic() {
+        let mut mb = MemBuilder::new(2, vec![3]);
+        // stack
+        mb.init(1, vec![A::from(0), A::from(0)], Some(0));
+        mb.init(2, vec![A::from(0), A::from(0)], Some(0));
+        mb.init(3, vec![A::from(0), A::from(0)], Some(0));
+        // ram
+        mb.init(4, vec![A::from(16), A::from(17)], None);
+
+        mb.push(0, vec![A::from(1), A::from(2)]);
+        mb.push(0, vec![A::from(3), A::from(4)]);
+        assert_eq!(mb.pop(0), vec![A::from(3), A::from(4)]);
+
+        mb.push(0, vec![A::from(5), A::from(6)]);
+        mb.push(0, vec![A::from(7), A::from(8)]);
+        assert_eq!(mb.pop(0), vec![A::from(7), A::from(8)]);
+        assert_eq!(mb.pop(0), vec![A::from(5), A::from(6)]);
+        assert_eq!(mb.pop(0), vec![A::from(1), A::from(2)]);
+
+        run_ram_nova(2, 2, mb, stack_basic_circ);
+    }
+
+    fn stack_basic_circ(
+        i: usize,
+        rm: &mut RunningMem<A>,
+        rmw: &mut RunningMemWires<A>,
+        rw_mem_ops: &mut Vec<MemElemWires<A>>,
+    ) {
+        let (read_addr, write_addr, write_vals) = if i == 0 {
+            (1, 2, vec![18, 19])
+        } else if i == 1 {
+            (3, 4, vec![20, 21])
+        } else {
+            panic!()
+        };
+
+        let res = rm.read(
+            &FpVar::new_witness(rmw.cs.clone(), || Ok(A::from(read_addr as u64))).unwrap(),
+            rmw,
+        );
+        assert!(res.is_ok());
+        let (r, w) = res.unwrap();
+        rw_mem_ops.push(r);
+        rw_mem_ops.push(w);
+
+        let res = rm.write(
+            &FpVar::new_witness(rmw.cs.clone(), || Ok(A::from(write_addr))).unwrap(),
+            write_vals
+                .iter()
+                .map(|v| FpVar::new_witness(rmw.cs.clone(), || Ok(A::from(*v as u64))).unwrap())
+                .collect(),
+            rmw,
+        );
+        assert!(res.is_ok());
+        let (r, w) = res.unwrap();
+        rw_mem_ops.push(r);
+        rw_mem_ops.push(w);
     }
 
     #[test]
