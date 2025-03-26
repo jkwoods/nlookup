@@ -266,6 +266,7 @@ impl<F: PrimeField> MemBuilder<F> {
         // false -> cmts/ivcify = [is], [rs, ws, fs]
         fs: &Vec<MemElem<F>>,
     ) -> (Vec<N2>, Vec<Vec<N1>>, Vec<Vec<N1>>) {
+        println!("if batch size {}", if_batch_size);
         assert!((sep_final && ic_gen.len() == 3) || (!sep_final && ic_gen.len() == 2));
 
         let mut ci: Vec<Option<N2>> = vec![None; ic_gen.len()];
@@ -282,24 +283,11 @@ impl<F: PrimeField> MemBuilder<F> {
             let mut rs_ws_hint = Vec::new();
             let mut fs_hint = Vec::new();
             //let mut wits: Vec<Vec<N1>> = vec![Vec::new(); ic_gen.len()];
-            for (((im, rm), wm), fm) in self.is
-                [(i * if_batch_size)..(i * if_batch_size + if_batch_size)]
+            for (im, fm) in self.is[(i * if_batch_size)..(i * if_batch_size + if_batch_size)]
                 .iter()
-                .zip(self.rs[(i * rw_batch_size)..(i * rw_batch_size + rw_batch_size)].iter())
-                .zip(self.ws[(i * rw_batch_size)..(i * rw_batch_size + rw_batch_size)].iter())
                 .zip(fs[(i * if_batch_size)..(i * if_batch_size + if_batch_size)].iter())
             {
                 let nova_im: Vec<N1> = im
-                    .get_vec()
-                    .iter()
-                    .map(|a| ark_to_nova_field::<F, N1>(a))
-                    .collect();
-                let nova_rm: Vec<N1> = rm
-                    .get_vec()
-                    .iter()
-                    .map(|a| ark_to_nova_field::<F, N1>(a))
-                    .collect();
-                let nova_wm: Vec<N1> = wm
                     .get_vec()
                     .iter()
                     .map(|a| ark_to_nova_field::<F, N1>(a))
@@ -311,10 +299,33 @@ impl<F: PrimeField> MemBuilder<F> {
                     .collect();
 
                 is_hint.extend(nova_im);
-                rs_ws_hint.extend(nova_rm);
-                rs_ws_hint.extend(nova_wm);
                 fs_hint.extend(nova_fm);
             }
+            for (rm, wm) in self.rs[(i * rw_batch_size)..(i * rw_batch_size + rw_batch_size)]
+                .iter()
+                .zip(self.ws[(i * rw_batch_size)..(i * rw_batch_size + rw_batch_size)].iter())
+            {
+                let nova_rm: Vec<N1> = rm
+                    .get_vec()
+                    .iter()
+                    .map(|a| ark_to_nova_field::<F, N1>(a))
+                    .collect();
+                let nova_wm: Vec<N1> = wm
+                    .get_vec()
+                    .iter()
+                    .map(|a| ark_to_nova_field::<F, N1>(a))
+                    .collect();
+
+                rs_ws_hint.extend(nova_rm);
+                rs_ws_hint.extend(nova_wm);
+            }
+
+            println!(
+                "is len {}, rs ws len {}, fs len {}",
+                is_hint.len(),
+                rs_ws_hint.len(),
+                fs_hint.len()
+            );
             let mut ordered_hints = is_hint;
             ordered_hints.extend(rs_ws_hint);
             ordered_hints.extend(fs_hint);
