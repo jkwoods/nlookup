@@ -90,7 +90,10 @@ impl<N: novaPrimeField<Repr = [u8; 32]>> FCircuit<N> {
     // (i.e. a user should have never called new_input())
     pub fn new<A: arkPrimeField>(ark_cs_ref: ConstraintSystemRef<A>) -> Self {
         // println!("{:?}", ark_cs_ref);
+
         ark_cs_ref.finalize();
+        assert!(ark_cs_ref.is_satisfied().unwrap());
+
         let ark_cs = ark_cs_ref.borrow().unwrap();
 
         // io pairs + constant
