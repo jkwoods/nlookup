@@ -11,10 +11,124 @@ stack spaces [
 ], ptrs [
     1,
 ]
+PUSH
+RS MemElem {
+    time: 0,
+    addr: 1,
+    vals: [
+        0,
+        0,
+    ],
+    sr: true,
+}
+WS MemElem {
+    time: 1,
+    addr: 1,
+    vals: [
+        1,
+        2,
+    ],
+    sr: true,
+}
 2 <? 4
+PUSH
+RS MemElem {
+    time: 0,
+    addr: 2,
+    vals: [
+        0,
+        0,
+    ],
+    sr: true,
+}
+WS MemElem {
+    time: 2,
+    addr: 2,
+    vals: [
+        3,
+        4,
+    ],
+    sr: true,
+}
 3 <? 4
+POP
+RS MemElem {
+    time: 2,
+    addr: 2,
+    vals: [
+        3,
+        4,
+    ],
+    sr: true,
+}
+WS MemElem {
+    time: 3,
+    addr: 2,
+    vals: [
+        3,
+        4,
+    ],
+    sr: true,
+}
+PUSH
+RS MemElem {
+    time: 2,
+    addr: 2,
+    vals: [
+        3,
+        4,
+    ],
+    sr: true,
+}
+WS MemElem {
+    time: 4,
+    addr: 2,
+    vals: [
+        5,
+        6,
+    ],
+    sr: true,
+}
 3 <? 4
+PUSH
+RS MemElem {
+    time: 0,
+    addr: 3,
+    vals: [
+        0,
+        0,
+    ],
+    sr: true,
+}
+WS MemElem {
+    time: 5,
+    addr: 3,
+    vals: [
+        7,
+        8,
+    ],
+    sr: true,
+}
 4 <? 4
+POP
+RS MemElem {
+    time: 5,
+    addr: 3,
+    vals: [
+        7,
+        8,
+    ],
+    sr: true,
+}
+WS MemElem {
+    time: 6,
+    addr: 3,
+    vals: [
+        7,
+        8,
+    ],
+    sr: true,
+}
 num iters 2
 scan per batch 2
 if batch size 2
@@ -219,16 +333,16 @@ ordered_hints len 50, ranges [
     0x0000000000000000000000000000000000000000000000000000000000000001,
     0x0000000000000000000000000000000000000000000000000000000000000000,
     0x0000000000000000000000000000000000000000000000000000000000000000,
-] with blind 0x0526704bd680ace2662c941ff277712840f0604eeb956813e3bf8f5e9200a788
+] with blind 0x181714a8c68ddcac60bdde90ed0aa280b4f9c6c8662d4fdd16495df939dc90f9
 cmt in clear Commitment {
     comm: Ep {
-        x: 0x279812f1a805e6c1418815ad0f50960281085b69baee059452bede8e722e41e6,
-        y: 0x05b599033301057c97322c194000260f56f505a7a32d50e27da290fe28b5f488,
-        z: 0x2d2befc9d7caae4705d1fac67c540d41fac9f24712bc9b8f691d8527bf371d82,
+        x: 0x11a4c7d2944205f940bdb5f72c20f50b06de0e18783300e2bfa710459e5a5422,
+        y: 0x1ddfa0fc466b9a78dff912abb104b6eac519c316ecd6ceea2aa01359760390c1,
+        z: 0x10230e54da52c373ddd3a5f6f9bd9de1b1215aa371e08a996cf0701c517b8177,
     },
 }
-x 0x39aaf0b988a0b453d9e1755808b2532596ad1a7a70b2b55d9eb6ffe81af77241
-hash in clear 0x01acd4d73a3a81e54eabbb7f70848728c216511210272b5c7f9f0fb5a4ac8655
+x 0x1f92355e5450697ddf3a36f1a0434f22e60a328ffb4e40927357841fc7162af8
+hash in clear 0x02d44131b1501f14efe2ce95b204a5b896bfcba421714aea5cc96eec937325d5
 committing to [
     0x0000000000000000000000000000000000000000000000000000000000000000,
     0x0000000000000000000000000000000000000000000000000000000000000001,
@@ -270,16 +384,16 @@ committing to [
     0x0000000000000000000000000000000000000000000000000000000000000001,
     0x0000000000000000000000000000000000000000000000000000000000000005,
     0x0000000000000000000000000000000000000000000000000000000000000006,
-] with blind 0x1affca382a4077c1f150927815cc1ab437a0c5e948b819dd7f4cd6e3fad944e4
+] with blind 0x2a0ebbfa35ab899683ab54a06e9dfd6b668e1310b091d8ac4e15e037846e91b7
 cmt in clear Commitment {
     comm: Ep {
-        x: 0x12d0948c9fe237e4a18e82e4c438f9b0c99f8b4d16561b3d9ee801ca861c01d7,
-        y: 0x1d609106f43299ccd6d2f84eee5bf8c768a94b9ebaa87e352bbf7321c150f43b,
-        z: 0x399928f83d695803ac418813ff9f2cf54038fc846d29432b7bdee0a2d853a43b,
+        x: 0x246be6eb44765d303bd0e3c00cd80740c07033964cf6b40306d1a73cfc1c78c4,
+        y: 0x14436fb66a7f039600bd03dc51e2758c43fca10620206c353bccf0d1e740c777,
+        z: 0x3589e78bd8116b634321f30e84d93cd8ae2f6fa4d3402d609d6c2d6cf1d01d9a,
     },
 }
-x 0x3fa5d8c42ba000216cefa6d283a23381455c038139a84000051a0208f032613f
-hash in clear 0x01f3f9cd5ed2633560907a1a5cde77c8879479912fa3660c00fe20b123f0722c
+x 0x3dad72e605cd6a253655c5d80794c9ea65701aa08fd14dbdaacf43e243b61b6f
+hash in clear 0x02b28be66a43eb72e50315d4ee7d763e112c3484b9985c8f7326fd8a0bd5ea10
 ordered hints 0 [
     0x0000000000000000000000000000000000000000000000000000000000000000,
     0x0000000000000000000000000000000000000000000000000000000000000001,
@@ -348,16 +462,16 @@ ordered_hints len 50, ranges [
     0x0000000000000000000000000000000000000000000000000000000000000000,
     0x0000000000000000000000000000000000000000000000000000000000000010,
     0x0000000000000000000000000000000000000000000000000000000000000011,
-] with blind 0x293e7abd5010aeff76111f9911add6dc1aa381277134f3fe75124c2ecf3a90c7
+] with blind 0x11316a210105e19ce89af3fef55ebf4890639c8b9bbd2879e20a787b0ed5ba0d
 cmt in clear Commitment {
     comm: Ep {
-        x: 0x26c93224bae0c960af30bc693a3f6a3f617804b105cb670e73ace342b9dd9e18,
-        y: 0x079a02f51abebe6dca225d3fcd82e182e98e32ea2c13f01ba5994b4e0e4f7168,
-        z: 0x2e22971d3ec3c5547a3c28e2d31a6a6a9fdf8686af4092a1777e25d06a60eb0b,
+        x: 0x07b465a8779136b9e8b2277fe367188baed3ce6448cca25632b1168c49d989d4,
+        y: 0x3c4d6eb004d5bde1d4257f7b4495e9b394a099255643bd3e1b519b5e528f9521,
+        z: 0x3d05140f4584592e09a7740852b34c914e7410ebfdca0b00fc50d0cb91569270,
     },
 }
-x 0x0e9a84e4e70458b0ec0b39517d1c2b433b68a4b7e29f58e25bd57f41e54c7338
-hash in clear 0x001705fecae8f91f11fc334251ddac14dd2afd1b0ce99ed3b2b8623f2273600c
+x 0x2a6ab92063bab6a6b4b961c7132746d32f15bbb371b5a721fce2b6af82517ac4
+hash in clear 0x03b276739488a08fa822f12751860af89603316b61d826f88390e683a7f45808
 committing to [
     0x0000000000000000000000000000000000000000000000000000000000000002,
     0x0000000000000000000000000000000000000000000000000000000000000002,
@@ -399,16 +513,16 @@ committing to [
     0x0000000000000000000000000000000000000000000000000000000000000000,
     0x0000000000000000000000000000000000000000000000000000000000000010,
     0x0000000000000000000000000000000000000000000000000000000000000011,
-] with blind 0x072ac51a6bb671af8baecdcebbfcc2301e1a65e09f55944a2df243ef5e86809b
+] with blind 0x19eb5a18a8ca9d0e09eda14a38bc848f71effedc982c9505f11849499194866a
 cmt in clear Commitment {
     comm: Ep {
-        x: 0x1a119c3b07654f2fa53c30b692a1f0ad8abc399d2641c0762d8b932cd4397762,
-        y: 0x31c5096060ddb47304ba902c5bbed75c7141d8af18b6fce803bf6864a655859c,
-        z: 0x23d460736c033d769aacee2433123608eed353b742c9952991ecd64149f5b35b,
+        x: 0x112154c661eca273b8268499e82fa3d1cc5c4327aea68ea04f4e24d9d2a90203,
+        y: 0x227d081e06edf5716d1f21b9bfdab748f588cebb6599c0843873d31e7dd83a7d,
+        z: 0x1c07e1924e3c38cfe158876f5ee7a8c4e27ed26e2d01adbccfbf57f34a599a15,
     },
 }
-x 0x1789b73e2b41b24fd2441185466c6ad36bf4c04a392f8e69f26d6da997a02e25
-hash in clear 0x003858fc6698a422d3fe5853370515a891612820d4d44b81e934214fb73c52de
+x 0x20ad255fa11e0a515dd2cbf198f4a6fd5bcd828d2fd6768ea5d1a12f1003e63d
+hash in clear 0x00164beb5f705eedcd6a130b351c8338174c4917daf0a687bfaeeddf7fb6e3d9
 ordered hints 1 [
     0x0000000000000000000000000000000000000000000000000000000000000000,
     0x0000000000000000000000000000000000000000000000000000000000000003,
@@ -748,7 +862,7 @@ false
 16
 17
 ==============================================
-thread 'memory::nebula::tests::stack_basic' panicked at src/memory/nebula.rs:1132:13:
+thread 'memory::nebula::tests::stack_basic' panicked at src/memory/nebula.rs:1142:13:
 assertion failed: res.is_ok()
 note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
 
@@ -756,5 +870,5 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
 failures:
     memory::nebula::tests::stack_basic
 
-test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 24 filtered out; finished in 1.81s
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 24 filtered out; finished in 1.88s
 

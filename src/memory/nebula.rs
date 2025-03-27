@@ -161,8 +161,6 @@ impl<F: PrimeField> MemBuilder<F> {
             }
         }
 
-        println!("stack spaces {:#?}, ptrs {:#?}", stack_spaces, stack_ptrs);
-
         Self {
             mem: HashMap::new(),
             is: Vec::new(),
@@ -188,11 +186,6 @@ impl<F: PrimeField> MemBuilder<F> {
 
         self.stack_ptrs[stack_tag] += 1;
 
-        println!(
-            "{:#?} <? {:#?}",
-            self.stack_ptrs[stack_tag],
-            self.stack_spaces[stack_tag + 1]
-        );
         assert!(self.stack_ptrs[stack_tag] <= self.stack_spaces[stack_tag + 1]);
     }
 
@@ -206,7 +199,7 @@ impl<F: PrimeField> MemBuilder<F> {
 
     pub fn read(&mut self, addr: usize, is_stack: bool) -> Vec<F> {
         let read_elem = if self.mem.contains_key(&addr) {
-            self.mem.get(&addr).unwrap()
+            self.mem.get(&addr).unwrap().clone()
         } else {
             panic!("Uninitialized memory addr")
         };
@@ -221,10 +214,12 @@ impl<F: PrimeField> MemBuilder<F> {
             read_elem.vals.clone(),
             is_stack,
         );
+        self.mem.insert(addr, write_elem.clone());
         self.ws.push(write_elem.clone());
+
         self.fs.insert(addr, write_elem);
 
-        read_elem.vals.clone()
+        read_elem.vals
     }
 
     // initialize memory
@@ -254,12 +249,14 @@ impl<F: PrimeField> MemBuilder<F> {
             panic!("Uninitialized memory addr")
         };
         assert_eq!(read_elem.addr, F::from(addr as u64));
+
         self.rs.push(read_elem.clone());
         self.ts += 1;
 
         let write_elem = MemElem::new_f(F::from(self.ts as u64), read_elem.addr, vals, is_stack);
         self.mem.insert(addr, write_elem.clone());
         self.ws.push(write_elem.clone());
+
         self.fs.insert(addr, write_elem);
     }
 
@@ -274,17 +271,11 @@ impl<F: PrimeField> MemBuilder<F> {
         fs: &Vec<MemElem<F>>,
         padding: &MemElem<F>,
     ) -> (Vec<N2>, Vec<Vec<N1>>, Vec<Vec<N1>>) {
-        println!("if batch size {}", if_batch_size);
         assert!((sep_final && ic_gen.len() == 3) || (!sep_final && ic_gen.len() == 2));
 
         let mut ci: Vec<Option<N2>> = vec![None; ic_gen.len()];
         let mut blinds: Vec<Vec<N1>> = vec![Vec::new(); num_iters];
         let mut ram_hints = Vec::new();
-
-        println!(
-            "ic to ram: IS {:#?} RS {:#?} WS {:#?} FS {:#?}",
-            self.is, self.rs, self.ws, fs
-        );
 
         for i in 0..num_iters {
             let mut is_hint = Vec::new();
@@ -342,19 +333,12 @@ impl<F: PrimeField> MemBuilder<F> {
                 rs_ws_hint.extend(nova_wm);
             }
 
-            println!(
-                "is len {}, rs ws len {}, fs len {}",
-                is_hint.len(),
-                rs_ws_hint.len(),
-                fs_hint.len()
-            );
             let mut ordered_hints = is_hint;
             ordered_hints.extend(rs_ws_hint);
             ordered_hints.extend(fs_hint);
 
             let ifb = if_batch_size * (3 + self.elem_len);
             let rwb = rw_batch_size * (3 + self.elem_len);
-            println!("ifb {}, rwb {}", ifb, rwb);
 
             let hint_ranges = if sep_final {
                 vec![
@@ -365,11 +349,6 @@ impl<F: PrimeField> MemBuilder<F> {
             } else {
                 vec![0..ifb, ifb..(ifb * 2 + rwb * 2)]
             };
-            print!(
-                "ordered_hints len {}, ranges {:#?}",
-                ordered_hints.len(),
-                hint_ranges
-            );
 
             for (j, range) in hint_ranges.into_iter().enumerate() {
                 let (hash, blind) = ic_gen[j].commit(ci[j], &ordered_hints[range]);
@@ -377,7 +356,6 @@ impl<F: PrimeField> MemBuilder<F> {
 
                 blinds[i].push(blind);
             }
-            println!("ordered hints {} {:#?}", i, ordered_hints.clone());
             ram_hints.push(ordered_hints);
         }
 
@@ -404,7 +382,6 @@ impl<F: PrimeField> MemBuilder<F> {
         assert_eq!(self.rs.len() % rw_batch_size, 0); // assumes exact padding
         assert!(rw_batch_size > 0);
         let num_iters = self.rs.len() / rw_batch_size;
-        println!("num iters {}", num_iters);
 
         // by address
         let mut vec_fs: Vec<MemElem<F>> = self.fs.clone().into_values().collect();
@@ -419,7 +396,6 @@ impl<F: PrimeField> MemBuilder<F> {
         assert_eq!(vec_fs.len(), self.is.len());
 
         let scan_per_batch = ((self.is.len() as f32) / (num_iters as f32)).ceil() as usize;
-        println!("scan per batch {}", scan_per_batch);
 
         let padding = MemElem::new_u(0, 0, vec![0; self.elem_len], false);
 
@@ -450,10 +426,7 @@ impl<F: PrimeField> MemBuilder<F> {
             &padding,
         );
 
-        println!("RAM HINTS {:#?}", ram_hints.clone());
-
         let perm_chal = nova_to_ark_field::<N1, F>(&sample_challenge(&ic_cmt));
-        println!("scan per batch {}", scan_per_batch);
 
         (
             ic_gens,
@@ -544,11 +517,8 @@ impl<F: PrimeField> RunningMem<F> {
         running_rs: F,
         running_ws: F,
         running_fs: F,
-        stack_ptrs: Vec<F>,
+        stack_ptrs: &Vec<F>,
     ) -> Result<RunningMemWires<F>, SynthesisError> {
-        println!("stack ptrs {:#?}", stack_ptrs);
-        println!("stack spaces {:#?}", self.stack_spaces);
-
         let running_is = FpVar::new_witness(cs.clone(), || Ok(running_is))?;
         let running_rs = FpVar::new_witness(cs.clone(), || Ok(running_rs))?;
         let running_ws = FpVar::new_witness(cs.clone(), || Ok(running_ws))?;
@@ -589,17 +559,17 @@ impl<F: PrimeField> RunningMem<F> {
         let sp = FpVar::new_witness(w.cs.clone(), || {
             Ok(w.stack_ptrs[stack_tag].value()? + F::ONE)
         })?;
-        //      sp.conditional_enforce_equal(&(&w.stack_ptrs[stack_tag] + &FpVar::one()), &cond)?;
+        sp.conditional_enforce_equal(&(&w.stack_ptrs[stack_tag] + &FpVar::one()), &cond)?;
         w.stack_ptrs[stack_tag] = cond.select(&sp, &w.stack_ptrs[stack_tag])?;
 
         // boundry check
-        /*   w.stack_ptrs[stack_tag].conditional_enforce_not_equal(
+        w.stack_ptrs[stack_tag].conditional_enforce_not_equal(
             &FpVar::new_constant(
                 w.cs.clone(),
                 F::from((self.stack_spaces[stack_tag + 1] + 1) as u64),
             )?,
             cond,
-        )?;*/
+        )?;
 
         res
     }
@@ -646,17 +616,17 @@ impl<F: PrimeField> RunningMem<F> {
         let sp = FpVar::new_witness(w.cs.clone(), || {
             Ok(w.stack_ptrs[stack_tag].value()? - F::ONE)
         })?;
-        //        sp.conditional_enforce_equal(&(&w.stack_ptrs[stack_tag] - &FpVar::one()), &cond)?;
+        sp.conditional_enforce_equal(&(&w.stack_ptrs[stack_tag] - &FpVar::one()), &cond)?;
         w.stack_ptrs[stack_tag] = cond.select(&sp, &w.stack_ptrs[stack_tag])?;
 
         let res = self.conditional_op(cond, &w.stack_ptrs[stack_tag].clone(), None, true, w);
-        /*
-                // boundry check
-                w.stack_ptrs[stack_tag].conditional_enforce_not_equal(
-                    &FpVar::new_constant(w.cs.clone(), F::from(self.stack_spaces[stack_tag] as u64))?,
-                    cond,
-                )?;
-        */
+
+        // boundry check
+        w.stack_ptrs[stack_tag].conditional_enforce_not_equal(
+            &FpVar::new_constant(w.cs.clone(), F::from(self.stack_spaces[stack_tag] as u64))?,
+            cond,
+        )?;
+
         res
     }
 
@@ -704,7 +674,6 @@ impl<F: PrimeField> RunningMem<F> {
         // RS = RS * tup
         let read_wit = self.mem_wits.get(&addr.value()?).unwrap();
         assert_eq!(read_wit.addr, addr.value()?);
-        //println!("READ WIT");
 
         let read_mem_elem = MemElemWires::new(
             FpVar::new_witness(w.cs.clone(), || Ok(read_wit.time))?,
@@ -752,9 +721,6 @@ impl<F: PrimeField> RunningMem<F> {
         let write_mem_elem = MemElemWires::new(ts, addr.clone(), v_prime, read_mem_elem.sr.clone());
         let next_running_ws = &w.running_ws * write_mem_elem.hash(w.cs.clone(), &w.perm_chal)?;
         w.running_ws = cond.select(&next_running_ws, &w.running_ws)?;
-
-        //println!("WRITE WIT");
-        //write_mem_elem.print_vals();
 
         Ok((read_mem_elem, write_mem_elem))
     }
@@ -890,6 +856,7 @@ mod tests {
         running_rs: &mut A,
         running_ws: &mut A,
         running_fs: &mut A,
+        stack_ptrs: &mut Vec<A>,
     ) -> FCircuit<N1> {
         let cs = ConstraintSystem::<A>::new_ref();
         cs.set_optimization_goal(OptimizationGoal::Constraints);
@@ -901,7 +868,7 @@ mod tests {
                 *running_rs,
                 *running_ws,
                 *running_fs,
-                rm.get_starting_stack_ptrs(),
+                stack_ptrs,
             )
             .unwrap();
 
@@ -921,11 +888,9 @@ mod tests {
         for mo in &rw_mem_ops {
             mo.print_vals();
         }
-        println!("INIT");
         for mo in &next_mem_ops {
             mo.print_vals();
         }
-        println!("FINAL");
         for mo in &f {
             mo.print_vals();
         }
@@ -980,13 +945,19 @@ mod tests {
             .enforce_equal(&running_mem_wires.running_fs)
             .unwrap();
 
-        // running mem needs to be ivcified too, but that doesn't effect our final checks
+        // running mem, stack ptrs, etc, needs to be ivcified too, but that doesn't effect our final checks
         // so we omit for now
 
         *running_is = running_is_out.value().unwrap();
         *running_rs = running_rs_out.value().unwrap();
         *running_ws = running_ws_out.value().unwrap();
         *running_fs = running_fs_out.value().unwrap();
+        *stack_ptrs = running_mem_wires
+            .stack_ptrs
+            .iter()
+            .map(|f| f.value().unwrap())
+            .collect();
+
         FCircuit::new(cs)
     }
     pub fn ivcify_stack_op(
@@ -1061,6 +1032,7 @@ mod tests {
         let mut running_rs = A::one();
         let mut running_ws = A::one();
         let mut running_fs = A::one();
+        let mut stack_ptrs = rm.get_starting_stack_ptrs();
         let mut circuit_primary = make_full_mem_circ(
             0,
             &mut rm,
@@ -1069,6 +1041,7 @@ mod tests {
             &mut running_rs,
             &mut running_ws,
             &mut running_fs,
+            &mut stack_ptrs,
         );
 
         let z0_primary_full = circuit_primary.get_zi();
@@ -1140,6 +1113,7 @@ mod tests {
                     &mut running_rs,
                     &mut running_ws,
                     &mut running_fs,
+                    &mut stack_ptrs,
                 );
             }
         }
