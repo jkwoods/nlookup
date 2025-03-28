@@ -25,20 +25,22 @@ pub struct MemElem<F: PrimeField> {
     pub time: F,
     pub addr: F,
     pub vals: Vec<F>,
-    pub sr: bool, //stack=1  or ram=0
+    pub sr: F, // private ram = 0, public (init) ram = 1, public (init) stack = 2
 }
 
 impl<F: PrimeField> MemElem<F> {
-    pub fn new_u(t: usize, a: usize, v: Vec<usize>, sr: bool) -> Self {
+    pub fn new_u(t: usize, a: usize, v: Vec<usize>, sr: usize) -> Self {
+        assert!(sr <= 2);
         MemElem {
             time: F::from(t as u64),
             addr: F::from(a as u64),
             vals: v.into_iter().map(|x| F::from(x as u64)).collect(),
-            sr: sr,
+            sr: F::from(sr as u64),
         }
     }
 
-    pub fn new_f(t: F, a: F, v: Vec<F>, sr: bool) -> Self {
+    pub fn new_f(t: F, a: F, v: Vec<F>, sr: F) -> Self {
+        assert!(sr <= F::from(2));
         MemElem {
             time: t,
             addr: a,
@@ -47,24 +49,21 @@ impl<F: PrimeField> MemElem<F> {
         }
     }
 
-    pub fn new_single(t: usize, a: usize, v: usize, sr: bool) -> Self {
-        MemElem {
-            time: F::from(t as u64),
-            addr: F::from(a as u64),
-            vals: vec![F::from(v as u64)],
-            sr,
-        }
-    }
-
     pub fn get_vec(&self) -> Vec<F> {
-        let mut v = vec![
-            self.time,
-            self.addr,
-            if self.sr { F::one() } else { F::zero() },
-        ];
+        let mut v = vec![self.time, self.addr, self.sr];
         v.extend(self.vals.clone());
 
         v
+    }
+
+    pub fn hash(&self, perm_chal: F) -> F {
+        let mut hash = (perm_chal - self.time) * (perm_chal - self.addr) * (perm_chal - self.sr);
+
+        for i in 0..self.vals.len() {
+            hash = hash * (perm_chal - self.vals[i]);
+        }
+
+        hash
     }
 }
 
@@ -73,11 +72,11 @@ pub struct MemElemWires<F: PrimeField> {
     pub time: FpVar<F>,
     pub addr: FpVar<F>,
     pub vals: Vec<FpVar<F>>,
-    pub sr: Boolean<F>,
+    pub sr: FpVar<F>,
 }
 
 impl<F: PrimeField> MemElemWires<F> {
-    pub fn new(t: FpVar<F>, a: FpVar<F>, v: Vec<FpVar<F>>, sr: Boolean<F>) -> Self {
+    pub fn new(t: FpVar<F>, a: FpVar<F>, v: Vec<FpVar<F>>, sr: FpVar<F>) -> Self {
         MemElemWires {
             time: t,
             addr: a,
@@ -96,12 +95,17 @@ impl<F: PrimeField> MemElemWires<F> {
     }
 
     pub fn print_vals(&self) {
+        let sr_val = self.sr.value().unwrap();
         println!(
             "MemElem [{:#?} [time {:#?}] [addr {:#?}] [vals {:#?}]]",
-            if self.sr.value().unwrap() {
-                "STACK"
+            if sr_val == F::zero() {
+                "PRIVATE RAM"
+            } else if sr_val == F::one() {
+                "PUBLIC RAM"
+            } else if sr_val == F::from(2) {
+                "PUBLIC STACK"
             } else {
-                "RAM"
+                panic!()
             },
             self.time.value().unwrap(),
             self.addr.value().unwrap(),
@@ -117,9 +121,7 @@ impl<F: PrimeField> MemElemWires<F> {
         cs: ConstraintSystemRef<F>,
         perm_chal: &FpVar<F>,
     ) -> Result<FpVar<F>, SynthesisError> {
-        let mut hash = (perm_chal - &self.time)
-            * (perm_chal - &self.addr)
-            * (perm_chal - FpVar::from(self.sr.clone()));
+        let mut hash = (perm_chal - &self.time) * (perm_chal - &self.addr) * (perm_chal - &self.sr);
 
         for i in 0..self.vals.len() {
             hash = hash * (perm_chal - &self.vals[i]);
@@ -129,11 +131,18 @@ impl<F: PrimeField> MemElemWires<F> {
     }
 }
 
+pub enum MemType {
+    PrivRAM,
+    PubRAM,
+    Stack(usize),
+}
+
 // builds the witness for RunningMem
 #[derive(Debug)]
 pub struct MemBuilder<F: PrimeField> {
     mem: HashMap<usize, MemElem<F>>,
-    is: Vec<MemElem<F>>,
+    pub_is: Vec<MemElem<F>>,
+    priv_is: Vec<MemElem<F>>,
     rs: Vec<MemElem<F>>,
     ws: Vec<MemElem<F>>,
     fs: HashMap<usize, MemElem<F>>,
@@ -163,7 +172,8 @@ impl<F: PrimeField> MemBuilder<F> {
 
         Self {
             mem: HashMap::new(),
-            is: Vec::new(),
+            pub_is: Vec::new(),
+            priv_is: Vec::new(),
             rs: Vec::new(),
             ws: Vec::new(),
             fs: HashMap::new(),
@@ -175,14 +185,14 @@ impl<F: PrimeField> MemBuilder<F> {
     }
 
     pub fn pad(&mut self) {
-        let padding = MemElem::new_u(0, 0, vec![0; self.elem_len], false);
+        let padding = MemElem::new_u(0, 0, vec![0; self.elem_len], 0);
 
         self.rs.push(padding.clone());
         self.ws.push(padding);
     }
 
     pub fn push(&mut self, stack_tag: usize, vals: Vec<F>) {
-        self.write(self.stack_ptrs[stack_tag], vals, true);
+        self.inner_write(self.stack_ptrs[stack_tag], vals, 2);
 
         self.stack_ptrs[stack_tag] += 1;
 
@@ -194,10 +204,14 @@ impl<F: PrimeField> MemBuilder<F> {
 
         assert!(self.stack_ptrs[stack_tag] >= self.stack_spaces[stack_tag]);
 
-        self.read(self.stack_ptrs[stack_tag], true)
+        self.inner_read(self.stack_ptrs[stack_tag], 2)
     }
 
-    pub fn read(&mut self, addr: usize, is_stack: bool) -> Vec<F> {
+    pub fn read(&mut self, addr: usize, public: bool) -> Vec<F> {
+        self.inner_read(addr, if public { 1 } else { 0 })
+    }
+
+    fn inner_read(&mut self, addr: usize, mem_type: usize) -> Vec<F> {
         let read_elem = if self.mem.contains_key(&addr) {
             self.mem.get(&addr).unwrap().clone()
         } else {
@@ -212,7 +226,7 @@ impl<F: PrimeField> MemBuilder<F> {
             F::from(self.ts as u64),
             F::from(addr as u64),
             read_elem.vals.clone(),
-            is_stack,
+            F::from(mem_type as u64),
         );
         self.mem.insert(addr, write_elem.clone());
         self.ws.push(write_elem.clone());
@@ -224,22 +238,31 @@ impl<F: PrimeField> MemBuilder<F> {
 
     // initialize memory
     // note: if you plan on writing to an addr, it must be initialized
-    pub fn init(&mut self, addr: usize, vals: Vec<F>, stack_tag: Option<usize>) {
+    pub fn init(&mut self, addr: usize, vals: Vec<F>, mem_tag: MemType) {
         assert_eq!(vals.len(), self.elem_len, "Element not correct length");
         assert_ne!(addr, 0);
-        if stack_tag.is_some() {
-            assert!(vals.iter().all(|v| *v == F::ZERO));
-            assert!(addr < self.stack_spaces[stack_tag.unwrap() + 1]);
-            assert!(addr >= self.stack_spaces[stack_tag.unwrap()]);
-        }
+        let sr = match mem_tag {
+            MemType::PrivRAM => 0,
+            MemType::PubRAM => 1,
+            MemType::Stack(stack_tag) => {
+                assert!(vals.iter().all(|v| *v == F::ZERO));
+                assert!(addr < self.stack_spaces[stack_tag + 1]);
+                assert!(addr >= self.stack_spaces[stack_tag]);
+                2
+            }
+        };
 
-        let elem = MemElem::new_f(F::ZERO, F::from(addr as u64), vals, stack_tag.is_some());
+        let elem = MemElem::new_f(F::ZERO, F::from(addr as u64), vals, F::from(sr));
         self.mem.insert(addr, elem.clone());
-        self.is.push(elem.clone());
+
+        match mem_tag {
+            MemType::PrivRAM => self.priv_is.push(elem.clone()),
+            MemType::PubRAM | MemType::Stack(_) => self.pub_is.push(elem.clone()),
+        }
         self.fs.insert(addr, elem);
     }
 
-    pub fn write(&mut self, addr: usize, vals: Vec<F>, is_stack: bool) {
+    fn inner_write(&mut self, addr: usize, vals: Vec<F>, mem_type: usize) {
         assert_eq!(vals.len(), self.elem_len, "Element not correct length");
         assert_ne!(addr, 0);
 
@@ -253,22 +276,32 @@ impl<F: PrimeField> MemBuilder<F> {
         self.rs.push(read_elem.clone());
         self.ts += 1;
 
-        let write_elem = MemElem::new_f(F::from(self.ts as u64), read_elem.addr, vals, is_stack);
+        let write_elem = MemElem::new_f(
+            F::from(self.ts as u64),
+            read_elem.addr,
+            vals,
+            F::from(mem_type as u64),
+        );
         self.mem.insert(addr, write_elem.clone());
         self.ws.push(write_elem.clone());
 
         self.fs.insert(addr, write_elem);
     }
 
+    pub fn write(&mut self, addr: usize, vals: Vec<F>, public: bool) {
+        self.inner_write(addr, vals, if public { 1 } else { 0 });
+    }
+
     fn ic_to_ram(
         &self,
         ic_gen: &Vec<Incremental<E1, E2>>,
         rw_batch_size: usize,
-        if_batch_size: usize,
+        is_priv_batch_size: usize,
+        fs_priv_batch_size: usize,
         num_iters: usize,
         sep_final: bool, // true -> cmts/ivcify =  [is], [rs, ws], [fs]
         // false -> cmts/ivcify = [is], [rs, ws, fs]
-        fs: &Vec<MemElem<F>>,
+        priv_fs: &[MemElem<F>],
         padding: &MemElem<F>,
     ) -> (Vec<N2>, Vec<Vec<N1>>, Vec<Vec<N1>>) {
         assert!((sep_final && ic_gen.len() == 3) || (!sep_final && ic_gen.len() == 2));
@@ -281,46 +314,55 @@ impl<F: PrimeField> MemBuilder<F> {
             let mut is_hint = Vec::new();
             let mut rs_ws_hint = Vec::new();
             let mut fs_hint = Vec::new();
-            //let mut wits: Vec<Vec<N1>> = vec![Vec::new(); ic_gen.len()];
 
-            let (is_slice, fs_slice) = if (i * if_batch_size + if_batch_size) <= self.is.len() {
-                (
-                    self.is[(i * if_batch_size)..(i * if_batch_size + if_batch_size)].to_vec(),
-                    fs[(i * if_batch_size)..(i * if_batch_size + if_batch_size)].to_vec(),
-                )
+            let is_slice = if (i * is_priv_batch_size + is_priv_batch_size) <= self.priv_is.len() {
+                self.priv_is
+                    [(i * is_priv_batch_size)..(i * is_priv_batch_size + is_priv_batch_size)]
+                    .to_vec()
             } else {
-                if (i * if_batch_size) <= self.is.len() {
-                    let mut is_slice = self.is[(i * if_batch_size)..].to_vec();
-                    is_slice.extend(vec![padding.clone(); if_batch_size - is_slice.len()]);
+                if (i * is_priv_batch_size) <= self.priv_is.len() {
+                    let mut is_slice = self.priv_is[(i * is_priv_batch_size)..].to_vec();
+                    is_slice.extend(vec![padding.clone(); is_priv_batch_size - is_slice.len()]);
 
-                    let mut fs_slice = fs[(i * if_batch_size)..].to_vec();
-                    fs_slice.extend(vec![padding.clone(); if_batch_size - fs_slice.len()]);
-                    (is_slice, fs_slice)
+                    is_slice
                 } else {
-                    (
-                        vec![padding.clone(); if_batch_size],
-                        vec![padding.clone(); if_batch_size],
-                    )
+                    vec![padding.clone(); is_priv_batch_size]
                 }
             };
 
-            println!("is slice {} fs slice {}", is_slice.len(), fs_slice.len());
+            let fs_slice = if (i * fs_priv_batch_size + fs_priv_batch_size) <= priv_fs.len() {
+                (priv_fs[(i * fs_priv_batch_size)..(i * fs_priv_batch_size + fs_priv_batch_size)]
+                    .to_vec())
+            } else {
+                if (i * fs_priv_batch_size) <= priv_fs.len() {
+                    let mut fs_slice = priv_fs[(i * fs_priv_batch_size)..].to_vec();
+                    fs_slice.extend(vec![padding.clone(); fs_priv_batch_size - fs_slice.len()]);
 
-            for (im, fm) in is_slice.iter().zip(fs_slice.iter()) {
+                    fs_slice
+                } else {
+                    (vec![padding.clone(); fs_priv_batch_size])
+                }
+            };
+
+            for im in is_slice {
                 let nova_im: Vec<N1> = im
                     .get_vec()
                     .iter()
                     .map(|a| ark_to_nova_field::<F, N1>(a))
                     .collect();
+                is_hint.extend(nova_im);
+            }
+
+            for fm in fs_slice.iter() {
                 let nova_fm: Vec<N1> = fm
                     .get_vec()
                     .iter()
                     .map(|a| ark_to_nova_field::<F, N1>(a))
                     .collect();
 
-                is_hint.extend(nova_im);
                 fs_hint.extend(nova_fm);
             }
+
             for (rm, wm) in self.rs[(i * rw_batch_size)..(i * rw_batch_size + rw_batch_size)]
                 .iter()
                 .zip(self.ws[(i * rw_batch_size)..(i * rw_batch_size + rw_batch_size)].iter())
@@ -344,17 +386,18 @@ impl<F: PrimeField> MemBuilder<F> {
             ordered_hints.extend(rs_ws_hint);
             ordered_hints.extend(fs_hint);
 
-            let ifb = if_batch_size * (3 + self.elem_len);
+            let isb = is_priv_batch_size * (3 + self.elem_len);
+            let fsb = fs_priv_batch_size * (3 + self.elem_len);
             let rwb = rw_batch_size * (3 + self.elem_len);
 
             let hint_ranges = if sep_final {
                 vec![
-                    0..ifb,
-                    ifb..(ifb + rwb * 2),
-                    (ifb + rwb * 2)..(ifb * 2 + rwb * 2),
+                    0..isb,
+                    isb..(isb + rwb * 2),
+                    (isb + rwb * 2)..(isb + fsb + rwb * 2),
                 ]
             } else {
-                vec![0..ifb, ifb..(ifb * 2 + rwb * 2)]
+                vec![0..isb, isb..(isb + fsb + rwb * 2)]
             };
 
             for (j, range) in hint_ranges.into_iter().enumerate() {
@@ -390,28 +433,47 @@ impl<F: PrimeField> MemBuilder<F> {
         assert!(rw_batch_size > 0);
         let num_iters = self.rs.len() / rw_batch_size;
 
+        let padding = MemElem::new_u(0, 0, vec![0; self.elem_len], 0);
+
         // by address
         let mut vec_fs: Vec<MemElem<F>> = self.fs.clone().into_values().collect();
-        vec_fs.sort_by(|a, b| a.addr.partial_cmp(&b.addr).unwrap());
+        //vec_fs.sort_by(|a, b| a.addr.partial_cmp(&b.addr).unwrap());
+        vec_fs.sort_by(|a, b| a.sr.partial_cmp(&b.sr).unwrap());
 
-        self.is.sort_by(|a, b| a.addr.partial_cmp(&b.addr).unwrap());
+        let split = vec_fs.iter().position(|f| f.sr >= F::one());
+        let (priv_fs, pub_fs) = if split.is_some() {
+            vec_fs.split_at(split.unwrap())
+        } else {
+            (vec_fs.as_slice(), &[] as &[MemElem<F>])
+        };
+
+        // self.pub_is.sort_by(|a, b| a.addr.partial_cmp(&b.addr).unwrap());
+        // self.priv_is.sort_by(|a, b| a.addr.partial_cmp(&b.addr).unwrap());
+
+        assert_eq!(
+            priv_fs.len() + pub_fs.len(),
+            self.priv_is.len() + self.pub_is.len()
+        );
 
         let mut mem_wits = HashMap::new();
-        for elem in &self.is {
+        mem_wits.insert(F::zero(), padding.clone());
+        for elem in &self.pub_is {
             mem_wits.insert(elem.addr, elem.clone());
         }
-        assert_eq!(vec_fs.len(), self.is.len());
+        for elem in &self.priv_is {
+            mem_wits.insert(elem.addr, elem.clone());
+        }
 
-        let scan_per_batch = ((self.is.len() as f32) / (num_iters as f32)).ceil() as usize;
-
-        let padding = MemElem::new_u(0, 0, vec![0; self.elem_len], false);
+        let is_priv_per_batch = ((self.priv_is.len() as f32) / (num_iters as f32)).ceil() as usize;
+        let fs_priv_per_batch = ((priv_fs.len() as f32) / (num_iters as f32)).ceil() as usize;
 
         // cmt
         let mut big_gens = Incremental::<E1, E2>::setup(
             b"ramcmt",
-            scan_per_batch * 2 * (3 + self.elem_len) + rw_batch_size * 2 * (3 + self.elem_len),
+            (is_priv_per_batch + fs_priv_per_batch) * (3 + self.elem_len)
+                + rw_batch_size * 2 * (3 + self.elem_len),
         );
-        let (is_gens, big_gens) = big_gens.split_at(scan_per_batch * (3 + self.elem_len));
+        let (is_gens, big_gens) = big_gens.split_at(is_priv_per_batch * (3 + self.elem_len));
 
         let mut ic_gens = vec![is_gens];
 
@@ -423,21 +485,15 @@ impl<F: PrimeField> MemBuilder<F> {
             ic_gens.push(big_gens);
         }
 
-        println!("scan per batch {:#?}", scan_per_batch);
         let (ic_cmt, blinds, ram_hints) = self.ic_to_ram(
             &ic_gens,
             rw_batch_size,
-            scan_per_batch,
+            is_priv_per_batch,
+            fs_priv_per_batch,
             num_iters,
             sep_final,
-            &vec_fs,
+            priv_fs,
             &padding,
-        );
-
-        println!(
-            "RAM HINTS {:#?}, lens {:#?}",
-            ram_hints,
-            ram_hints.iter().map(|v| v.len()).collect::<Vec<usize>>()
         );
 
         let perm_chal = nova_to_ark_field::<N1, F>(&sample_challenge(&ic_cmt));
@@ -448,14 +504,18 @@ impl<F: PrimeField> MemBuilder<F> {
             blinds,
             ram_hints,
             RunningMem {
-                is: self.is,
+                priv_is: self.priv_is,
+                pub_is: self.pub_is,
                 mem_wits,
-                fs: vec_fs,
+                priv_fs: priv_fs.to_vec(),
+                pub_fs: pub_fs.to_vec(),
                 ts: F::zero(),
                 i: 0,
+                f: 0,
                 perm_chal,
                 elem_len: self.elem_len,
-                scan_per_batch,
+                is_priv_per_batch,
+                fs_priv_per_batch,
                 stack_spaces: self.stack_spaces,
                 padding,
             },
@@ -465,14 +525,18 @@ impl<F: PrimeField> MemBuilder<F> {
 
 #[derive(Clone, Debug)]
 pub struct RunningMem<F: PrimeField> {
-    is: Vec<MemElem<F>>,
+    priv_is: Vec<MemElem<F>>,
+    pub_is: Vec<MemElem<F>>,
     mem_wits: HashMap<F, MemElem<F>>,
-    fs: Vec<MemElem<F>>,
+    priv_fs: Vec<MemElem<F>>,
+    pub_fs: Vec<MemElem<F>>,
     ts: F,
-    i: usize, // for is/fs
+    i: usize, // for is
+    f: usize, // for fs
     perm_chal: F,
     elem_len: usize,
-    pub scan_per_batch: usize,
+    pub is_priv_per_batch: usize,
+    pub fs_priv_per_batch: usize,
     // if only ram, empty
     // stacks = [1, stack_1_limit, stack_2_limit, ....]
     stack_spaces: Vec<usize>,
@@ -500,17 +564,36 @@ impl<F: PrimeField> RunningMem<F> {
         }
 
         Self {
-            is: vec![self.padding.clone(); self.is.len()],
+            priv_is: vec![self.padding.clone(); self.priv_is.len()],
+            pub_is: self.pub_is.clone(),
             mem_wits,
-            fs: vec![self.padding.clone(); self.fs.len()],
+            priv_fs: vec![self.padding.clone(); self.priv_fs.len()],
+            pub_fs: self.pub_fs.clone(),
             ts: F::zero(),
             i: 0,
+            f: 0,
             perm_chal: self.perm_chal,
             elem_len: self.elem_len,
-            scan_per_batch: self.scan_per_batch,
+            is_priv_per_batch: self.is_priv_per_batch,
+            fs_priv_per_batch: self.fs_priv_per_batch,
             stack_spaces: self.stack_spaces.clone(),
             padding: self.padding.clone(),
         }
+    }
+
+    // can be called by prove on real RunningMem or by Verifier on dummy to produce same result
+    pub fn get_pub_is_fs_hashes(&self) -> (F, F) {
+        let mut pub_is = F::one();
+        for elem in &self.pub_is {
+            pub_is *= elem.hash(self.perm_chal);
+        }
+
+        let mut pub_fs = F::one();
+        for elem in &self.pub_fs {
+            pub_fs *= elem.hash(self.perm_chal);
+        }
+
+        (pub_is, pub_fs)
     }
 
     pub fn get_starting_stack_ptrs(&self) -> Vec<F> {
@@ -567,7 +650,7 @@ impl<F: PrimeField> RunningMem<F> {
         assert_eq!(w.stack_ptrs.len(), self.stack_spaces.len() - 1);
         assert!(stack_tag < self.stack_spaces.len());
 
-        let res = self.conditional_op(cond, &w.stack_ptrs[stack_tag].clone(), Some(vals), true, w);
+        let res = self.conditional_op(cond, &w.stack_ptrs[stack_tag].clone(), Some(vals), 2, w);
 
         // sp ++
         let sp = FpVar::new_witness(w.cs.clone(), || {
@@ -602,18 +685,20 @@ impl<F: PrimeField> RunningMem<F> {
         cond: &Boolean<F>,
         addr: &FpVar<F>,
         vals: Vec<FpVar<F>>,
+        public: bool,
         w: &mut RunningMemWires<F>,
     ) -> Result<(MemElemWires<F>, MemElemWires<F>), SynthesisError> {
-        self.conditional_op(cond, addr, Some(vals), false, w)
+        self.conditional_op(cond, addr, Some(vals), if public { 1 } else { 0 }, w)
     }
 
     pub fn write(
         &mut self,
         addr: &FpVar<F>,
         vals: Vec<FpVar<F>>,
+        public: bool,
         w: &mut RunningMemWires<F>,
     ) -> Result<(MemElemWires<F>, MemElemWires<F>), SynthesisError> {
-        self.conditional_write(&Boolean::TRUE, addr, vals, w)
+        self.conditional_write(&Boolean::TRUE, addr, vals, public, w)
     }
 
     pub fn conditional_pop(
@@ -633,7 +718,7 @@ impl<F: PrimeField> RunningMem<F> {
         sp.conditional_enforce_equal(&(&w.stack_ptrs[stack_tag] - &FpVar::one()), &cond)?;
         w.stack_ptrs[stack_tag] = cond.select(&sp, &w.stack_ptrs[stack_tag])?;
 
-        let res = self.conditional_op(cond, &w.stack_ptrs[stack_tag].clone(), None, true, w);
+        let res = self.conditional_op(cond, &w.stack_ptrs[stack_tag].clone(), None, 2, w);
 
         // boundry check
         w.stack_ptrs[stack_tag].conditional_enforce_not_equal(
@@ -659,17 +744,19 @@ impl<F: PrimeField> RunningMem<F> {
         &mut self,
         cond: &Boolean<F>,
         addr: &FpVar<F>,
+        public: bool,
         w: &mut RunningMemWires<F>,
     ) -> Result<(MemElemWires<F>, MemElemWires<F>), SynthesisError> {
-        self.conditional_op(cond, addr, None, false, w)
+        self.conditional_op(cond, addr, None, if public { 1 } else { 0 }, w)
     }
 
     pub fn read(
         &mut self,
         addr: &FpVar<F>,
+        public: bool,
         w: &mut RunningMemWires<F>,
     ) -> Result<(MemElemWires<F>, MemElemWires<F>), SynthesisError> {
-        self.conditional_read(&Boolean::TRUE, addr, w)
+        self.conditional_read(&Boolean::TRUE, addr, public, w)
     }
 
     fn conditional_op(
@@ -677,7 +764,7 @@ impl<F: PrimeField> RunningMem<F> {
         cond: &Boolean<F>,
         addr: &FpVar<F>,
         write_vals: Option<Vec<FpVar<F>>>,
-        is_stack: bool,
+        mem_type: usize,
         w: &mut RunningMemWires<F>,
     ) -> Result<(MemElemWires<F>, MemElemWires<F>), SynthesisError> {
         // ts = ts + 1
@@ -686,7 +773,7 @@ impl<F: PrimeField> RunningMem<F> {
         w.ts_m1 = cond.select(&ts, &w.ts_m1)?;
         self.ts = w.ts_m1.value()?;
 
-        // t < ts hack
+        // t < ts hack (later)
 
         // RS = RS * tup
         let read_wit = self.mem_wits.get(&addr.value()?).unwrap();
@@ -700,14 +787,14 @@ impl<F: PrimeField> RunningMem<F> {
                 .iter()
                 .map(|v| FpVar::new_witness(w.cs.clone(), || Ok(v)))
                 .collect::<Result<Vec<FpVar<F>>, _>>()?,
-            Boolean::new_witness(w.cs.clone(), || Ok(is_stack))?,
+            FpVar::new_witness(w.cs.clone(), || Ok(read_wit.sr))?,
         );
         let next_running_rs = &w.running_rs * read_mem_elem.hash(w.cs.clone(), &w.perm_chal)?;
         w.running_rs = cond.select(&next_running_rs, &w.running_rs)?;
 
         // stack or ram
         read_mem_elem.sr.conditional_enforce_equal(
-            &Boolean::<F>::new_constant(w.cs.clone(), is_stack)?,
+            &FpVar::<F>::new_constant(w.cs.clone(), F::from(mem_type as u64))?,
             cond,
         )?;
 
@@ -748,28 +835,57 @@ impl<F: PrimeField> RunningMem<F> {
         let mut is_elems = Vec::new();
         let mut fs_elems = Vec::new();
 
-        for _ in 0..self.scan_per_batch {
-            println!("i in scan {}", self.i);
-            println!("wits {:#?}", w.cs.num_witness_variables());
-            let (initial_mem_elem, final_mem_elem, cond) = if self.i < self.is.len() {
-                let is_wit = self.is[self.i].clone();
-                let fs_wit = self.fs[self.i].clone();
-                println!(
-                    "is len {:#?}, fs len {:#?}",
-                    is_wit.vals.len(),
-                    fs_wit.vals.len()
-                );
+        for _ in 0..self.is_priv_per_batch {
+            let (initial_mem_elem, cond) = if self.i < self.priv_is.len() {
+                let is_wit = self.priv_is[self.i].clone();
                 (
                     MemElemWires::new(
                         FpVar::new_witness(w.cs.clone(), || Ok(is_wit.time))?,
-                        FpVar::new_witness(w.cs.clone(), || Ok(fs_wit.addr))?,
+                        FpVar::new_witness(w.cs.clone(), || Ok(is_wit.addr))?,
                         is_wit
                             .vals
                             .iter()
                             .map(|v| FpVar::new_witness(w.cs.clone(), || Ok(v)))
                             .collect::<Result<Vec<FpVar<F>>, _>>()?,
-                        Boolean::new_witness(w.cs.clone(), || Ok(is_wit.sr))?,
+                        FpVar::new_witness(w.cs.clone(), || Ok(is_wit.sr))?,
                     ),
+                    Boolean::new_witness(w.cs.clone(), || Ok(true))?,
+                )
+            } else {
+                (
+                    MemElemWires::new(
+                        FpVar::new_witness(w.cs.clone(), || Ok(self.padding.time))?,
+                        FpVar::new_witness(w.cs.clone(), || Ok(self.padding.addr))?,
+                        self.padding
+                            .vals
+                            .iter()
+                            .map(|v| FpVar::new_witness(w.cs.clone(), || Ok(v)))
+                            .collect::<Result<Vec<FpVar<F>>, _>>()?,
+                        FpVar::new_witness(w.cs.clone(), || Ok(self.padding.sr))?,
+                    ),
+                    Boolean::new_witness(w.cs.clone(), || Ok(false))?,
+                )
+            };
+
+            // t < ts hack
+            initial_mem_elem.time.enforce_equal(&FpVar::zero())?;
+
+            initial_mem_elem.sr.enforce_equal(&FpVar::zero())?;
+
+            // IS check
+            let next_running_is =
+                &w.running_is * initial_mem_elem.hash(w.cs.clone(), &w.perm_chal)?;
+            w.running_is = cond.select(&next_running_is, &w.running_is)?;
+
+            self.i += 1;
+
+            is_elems.push(initial_mem_elem);
+        }
+
+        for _ in 0..self.fs_priv_per_batch {
+            let (final_mem_elem, cond) = if self.f < self.priv_fs.len() {
+                let fs_wit = self.priv_fs[self.f].clone();
+                (
                     MemElemWires::new(
                         FpVar::new_witness(w.cs.clone(), || Ok(fs_wit.time))?,
                         FpVar::new_witness(w.cs.clone(), || Ok(fs_wit.addr))?,
@@ -778,62 +894,36 @@ impl<F: PrimeField> RunningMem<F> {
                             .iter()
                             .map(|v| FpVar::new_witness(w.cs.clone(), || Ok(v)))
                             .collect::<Result<Vec<FpVar<F>>, _>>()?,
-                        Boolean::new_witness(w.cs.clone(), || Ok(fs_wit.sr))?,
+                        FpVar::new_witness(w.cs.clone(), || Ok(fs_wit.sr))?,
                     ),
-                    Boolean::<F>::new_witness(w.cs.clone(), || Ok(true))?,
+                    Boolean::new_witness(w.cs.clone(), || Ok(true))?,
                 )
             } else {
-                let padding_wires_1 = MemElemWires::new(
-                    FpVar::new_witness(w.cs.clone(), || Ok(self.padding.time))?,
-                    FpVar::new_witness(w.cs.clone(), || Ok(self.padding.addr))?,
-                    self.padding
-                        .vals
-                        .iter()
-                        .map(|v| FpVar::new_witness(w.cs.clone(), || Ok(v)))
-                        .collect::<Result<Vec<FpVar<F>>, _>>()?,
-                    Boolean::new_witness(w.cs.clone(), || Ok(self.padding.sr))?,
-                );
-                let padding_wires_2 = MemElemWires::new(
-                    FpVar::new_witness(w.cs.clone(), || Ok(self.padding.time))?,
-                    FpVar::new_witness(w.cs.clone(), || Ok(self.padding.addr))?,
-                    self.padding
-                        .vals
-                        .iter()
-                        .map(|v| FpVar::new_witness(w.cs.clone(), || Ok(v)))
-                        .collect::<Result<Vec<FpVar<F>>, _>>()?,
-                    Boolean::new_witness(w.cs.clone(), || Ok(self.padding.sr))?,
-                );
-
-                println!("wits {:#?}", w.cs.num_witness_variables());
-                println!("padding len {:#?}", self.padding.vals.len());
                 (
-                    padding_wires_1,
-                    padding_wires_2,
-                    Boolean::<F>::new_witness(w.cs.clone(), || Ok(false))?,
+                    MemElemWires::new(
+                        FpVar::new_witness(w.cs.clone(), || Ok(self.padding.time))?,
+                        FpVar::new_witness(w.cs.clone(), || Ok(self.padding.addr))?,
+                        self.padding
+                            .vals
+                            .iter()
+                            .map(|v| FpVar::new_witness(w.cs.clone(), || Ok(v)))
+                            .collect::<Result<Vec<FpVar<F>>, _>>()?,
+                        FpVar::new_witness(w.cs.clone(), || Ok(self.padding.sr))?,
+                    ),
+                    Boolean::new_witness(w.cs.clone(), || Ok(false))?,
                 )
             };
 
-            println!("wits {:#?}", w.cs.num_witness_variables());
-            // t < ts hack
-            initial_mem_elem.time.enforce_equal(&FpVar::zero())?;
-
-            // IS check
-            let next_running_is =
-                &w.running_is * initial_mem_elem.hash(w.cs.clone(), &w.perm_chal)?;
-            w.running_is = cond.select(&next_running_is, &w.running_is)?;
+            final_mem_elem.sr.enforce_equal(&FpVar::zero())?;
 
             // FS check
             let next_running_fs =
                 &w.running_fs * final_mem_elem.hash(w.cs.clone(), &w.perm_chal)?;
             w.running_fs = cond.select(&next_running_fs, &w.running_fs)?;
 
-            // is_a = fs_a = i ?
+            self.f += 1;
 
-            self.i += 1;
-
-            is_elems.push(initial_mem_elem);
             fs_elems.push(final_mem_elem);
-            println!("wits {:#?}", w.cs.num_witness_variables());
         }
 
         Ok((is_elems, fs_elems))
@@ -934,7 +1024,6 @@ mod tests {
 
         // doesn't matter what goes in anymore
         ivcify_stack_op(&next_mem_ops, &next_mem_ops, cs.clone()).unwrap();
-        println!("IVCIFY len {:#?}", next_mem_ops.len());
 
         let (running_is_in, running_is_out) = FpVar::new_input_output_pair(
             cs.clone(),
@@ -1003,12 +1092,6 @@ mod tests {
         assert_eq!(prev_ops.len(), next_ops.len());
 
         for i in 0..prev_ops.len() {
-            println!(
-                "next in ivc {:#?}, {:#?}",
-                next_ops[i].time.value()?,
-                next_ops[i].addr.value()?
-            );
-
             let (time_in, time_out) = FpVar::new_input_output_pair(
                 cs.clone(),
                 || Ok(prev_ops[i].time.value()?),
@@ -1025,7 +1108,7 @@ mod tests {
             next_ops[i].addr.enforce_equal(&addr_out)?;
 
             println!("{:#?}", next_ops[i].sr.value()?);
-            let (sr_in, sr_out) = Boolean::new_input_output_pair(
+            let (sr_in, sr_out) = FpVar::new_input_output_pair(
                 cs.clone(),
                 || Ok(prev_ops[i].sr.value()?),
                 || Ok(next_ops[i].sr.value()?),
@@ -1080,8 +1163,8 @@ mod tests {
         );
 
         let z0_primary_full = circuit_primary.get_zi();
-        let z0_primary = z0_primary_full
-            [(batch_size * 2 * (3 + rm.elem_len) + rm.scan_per_batch * 2 * (3 + rm.elem_len))..]
+        let z0_primary = z0_primary_full[(batch_size * 2 * (3 + rm.elem_len)
+            + (rm.is_priv_per_batch + rm.fs_priv_per_batch) * (3 + rm.elem_len))..]
             .to_vec();
 
         // produce public parameters
@@ -1097,8 +1180,8 @@ mod tests {
             &*default_ck_hint(),
             //rm.scan_per_batch * (3 + rm.elem_len),
             vec![
-                rm.scan_per_batch * (3 + rm.elem_len),
-                batch_size * 2 * (3 + rm.elem_len) + rm.scan_per_batch * (3 + rm.elem_len),
+                rm.is_priv_per_batch * (3 + rm.elem_len),
+                batch_size * 2 * (3 + rm.elem_len) + rm.fs_priv_per_batch * (3 + rm.elem_len),
             ],
             &[&ic_gens[0].ped_gen, &ic_gens[1].ped_gen],
         )
@@ -1169,8 +1252,13 @@ mod tests {
         // check final cmt outputs
         let (zn, _) = res.unwrap();
 
+        let (pub_is, pub_fs) = rm.get_pub_is_fs_hashes();
+
         // is * ws == rs * fs (verifier)
-        assert_eq!(zn[0] * zn[2], zn[1] * zn[3]);
+        assert_eq!(
+            ark_to_nova_field::<A, N1>(&pub_is) * zn[0] * zn[2],
+            zn[1] * zn[3] * ark_to_nova_field::<A, N1>(&pub_fs)
+        );
 
         // incr cmt = acc cmt (verifier)
         for i in 0..C_final.len() {
@@ -1183,14 +1271,13 @@ mod tests {
     fn two_stacks() {
         let mut mb = MemBuilder::new(2, vec![3, 2]);
         // stack 0
-        mb.init(1, vec![A::from(0), A::from(0)], Some(0));
-        mb.init(2, vec![A::from(0), A::from(0)], Some(0));
-        mb.init(3, vec![A::from(0), A::from(0)], Some(0));
+        mb.init(1, vec![A::from(0), A::from(0)], MemType::Stack(0));
+        mb.init(2, vec![A::from(0), A::from(0)], MemType::Stack(0));
+        mb.init(3, vec![A::from(0), A::from(0)], MemType::Stack(0));
         // stack 1
-        mb.init(4, vec![A::from(0), A::from(0)], Some(1));
-        mb.init(5, vec![A::from(0), A::from(0)], Some(1));
+        mb.init(4, vec![A::from(0), A::from(0)], MemType::Stack(1));
+        mb.init(5, vec![A::from(0), A::from(0)], MemType::Stack(1));
         // ram
-        // mb.init(6, vec![A::from(15), A::from(16)], None);
 
         // push, pop from stack 1
         mb.push(1, vec![A::from(1), A::from(2)]);
@@ -1291,11 +1378,11 @@ mod tests {
     fn stack_basic() {
         let mut mb = MemBuilder::new(2, vec![3]);
         // stack
-        mb.init(1, vec![A::from(0), A::from(0)], Some(0));
-        mb.init(2, vec![A::from(0), A::from(0)], Some(0));
-        mb.init(3, vec![A::from(0), A::from(0)], Some(0));
+        mb.init(1, vec![A::from(0), A::from(0)], MemType::Stack(0));
+        mb.init(2, vec![A::from(0), A::from(0)], MemType::Stack(0));
+        mb.init(3, vec![A::from(0), A::from(0)], MemType::Stack(0));
         // ram
-        mb.init(4, vec![A::from(16), A::from(17)], None);
+        mb.init(4, vec![A::from(16), A::from(17)], MemType::PrivRAM);
 
         mb.push(0, vec![A::from(1), A::from(2)]);
         mb.push(0, vec![A::from(3), A::from(4)]);
@@ -1355,10 +1442,10 @@ mod tests {
     #[test]
     fn mem_basic() {
         let mut mb = MemBuilder::new(2, vec![]);
-        mb.init(1, vec![A::from(10), A::from(11)], None);
-        mb.init(2, vec![A::from(12), A::from(13)], None);
-        mb.init(3, vec![A::from(14), A::from(15)], None);
-        mb.init(4, vec![A::from(16), A::from(17)], None);
+        mb.init(1, vec![A::from(10), A::from(11)], MemType::PrivRAM);
+        mb.init(2, vec![A::from(12), A::from(13)], MemType::PrivRAM);
+        mb.init(3, vec![A::from(14), A::from(15)], MemType::PrivRAM);
+        mb.init(4, vec![A::from(16), A::from(17)], MemType::PrivRAM);
 
         assert_eq!(mb.read(1, false), vec![A::from(10), A::from(11)]);
         mb.write(2, vec![A::from(18), A::from(19)], false);
@@ -1385,6 +1472,7 @@ mod tests {
 
         let res = rm.read(
             &FpVar::new_witness(rmw.cs.clone(), || Ok(A::from(read_addr as u64))).unwrap(),
+            false,
             rmw,
         );
         assert!(res.is_ok());
@@ -1398,6 +1486,7 @@ mod tests {
                 .iter()
                 .map(|v| FpVar::new_witness(rmw.cs.clone(), || Ok(A::from(*v as u64))).unwrap())
                 .collect(),
+            false,
             rmw,
         );
         assert!(res.is_ok());
@@ -1409,10 +1498,10 @@ mod tests {
     #[test]
     fn mem_bigger_init() {
         let mut mb = MemBuilder::new(2, vec![]);
-        mb.init(1, vec![A::from(10), A::from(11)], None);
-        mb.init(2, vec![A::from(12), A::from(13)], None);
-        mb.init(3, vec![A::from(14), A::from(15)], None);
-        mb.init(4, vec![A::from(16), A::from(17)], None);
+        mb.init(1, vec![A::from(10), A::from(11)], MemType::PrivRAM);
+        mb.init(2, vec![A::from(12), A::from(13)], MemType::PrivRAM);
+        mb.init(3, vec![A::from(14), A::from(15)], MemType::PrivRAM);
+        mb.init(4, vec![A::from(16), A::from(17)], MemType::PrivRAM);
 
         mb.write(1, vec![A::from(18), A::from(19)], false);
         mb.write(2, vec![A::from(20), A::from(21)], false);
@@ -1440,6 +1529,7 @@ mod tests {
                 .iter()
                 .map(|v| FpVar::new_witness(rmw.cs.clone(), || Ok(A::from(*v as u64))).unwrap())
                 .collect(),
+            false,
             rmw,
         );
         assert!(res.is_ok());

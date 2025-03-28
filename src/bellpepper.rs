@@ -89,17 +89,8 @@ impl<N: novaPrimeField<Repr = [u8; 32]>> FCircuit<N> {
     // the ark_cs should only have witness and input/output PAIRs
     // (i.e. a user should have never called new_input())
     pub fn new<A: arkPrimeField>(ark_cs_ref: ConstraintSystemRef<A>) -> Self {
-        // println!("{:?}", ark_cs_ref);
-
         ark_cs_ref.finalize();
         assert!(ark_cs_ref.is_satisfied().unwrap());
-
-        println!(
-            "BELLPEPPER CHECK {:#?}, {:#?}, {:#?}",
-            ark_cs_ref.num_instance_variables(),
-            ark_cs_ref.num_witness_variables(),
-            ark_cs_ref.num_constraints()
-        );
 
         let ark_cs = ark_cs_ref.borrow().unwrap();
 
@@ -119,20 +110,14 @@ impl<N: novaPrimeField<Repr = [u8; 32]>> FCircuit<N> {
             }
         }
 
-        // println!(" input assign {:?}", input_assignments.iter().map(|x| nova_to_ark_field::<N,A>(x)).collect::<Vec<A>>());
-        // println!(" output assign {:?}", output_assignments.iter().map(|x| nova_to_ark_field::<N,A>(x)).collect::<Vec<A>>());
-
         let wit_assignments: Vec<N> = ark_cs
             .witness_assignment
             .iter()
             .map(|f| ark_to_nova_field(f))
             .collect();
 
-        // println!(" witness assign {:?}", wit_assignments.iter().map(|x| nova_to_ark_field::<N,A>(x)).collect::<Vec<A>>());
-
         let ark_matrices = ark_cs.to_matrices().unwrap();
 
-        // println!("{:?}", ark_matrices);
         let mut lcs = Vec::new();
         for i in 0..ark_matrices.a.len() {
             lcs.push((
@@ -150,7 +135,6 @@ impl<N: novaPrimeField<Repr = [u8; 32]>> FCircuit<N> {
                     .collect(),
             ));
         }
-        // println!("{:?}", lcs);
 
         FCircuit {
             lcs,
