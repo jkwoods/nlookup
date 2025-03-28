@@ -94,6 +94,13 @@ impl<N: novaPrimeField<Repr = [u8; 32]>> FCircuit<N> {
         ark_cs_ref.finalize();
         assert!(ark_cs_ref.is_satisfied().unwrap());
 
+        println!(
+            "BELLPEPPER CHECK {:#?}, {:#?}, {:#?}",
+            ark_cs_ref.num_instance_variables(),
+            ark_cs_ref.num_witness_variables(),
+            ark_cs_ref.num_constraints()
+        );
+
         let ark_cs = ark_cs_ref.borrow().unwrap();
 
         // io pairs + constant

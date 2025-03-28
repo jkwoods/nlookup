@@ -304,6 +304,8 @@ impl<F: PrimeField> MemBuilder<F> {
                 }
             };
 
+            println!("is slice {} fs slice {}", is_slice.len(), fs_slice.len());
+
             for (im, fm) in is_slice.iter().zip(fs_slice.iter()) {
                 let nova_im: Vec<N1> = im
                     .get_vec()
@@ -421,6 +423,7 @@ impl<F: PrimeField> MemBuilder<F> {
             ic_gens.push(big_gens);
         }
 
+        println!("scan per batch {:#?}", scan_per_batch);
         let (ic_cmt, blinds, ram_hints) = self.ic_to_ram(
             &ic_gens,
             rw_batch_size,
@@ -429,6 +432,12 @@ impl<F: PrimeField> MemBuilder<F> {
             sep_final,
             &vec_fs,
             &padding,
+        );
+
+        println!(
+            "RAM HINTS {:#?}, lens {:#?}",
+            ram_hints,
+            ram_hints.iter().map(|v| v.len()).collect::<Vec<usize>>()
         );
 
         let perm_chal = nova_to_ark_field::<N1, F>(&sample_challenge(&ic_cmt));
@@ -628,7 +637,10 @@ impl<F: PrimeField> RunningMem<F> {
 
         // boundry check
         w.stack_ptrs[stack_tag].conditional_enforce_not_equal(
-            &FpVar::new_constant(w.cs.clone(), F::from(self.stack_spaces[stack_tag] as u64))?,
+            &FpVar::new_constant(
+                w.cs.clone(),
+                F::from((self.stack_spaces[stack_tag] - 1) as u64),
+            )?,
             cond,
         )?;
 
@@ -693,8 +705,6 @@ impl<F: PrimeField> RunningMem<F> {
         let next_running_rs = &w.running_rs * read_mem_elem.hash(w.cs.clone(), &w.perm_chal)?;
         w.running_rs = cond.select(&next_running_rs, &w.running_rs)?;
 
-        //read_mem_elem.print_vals();
-
         // stack or ram
         read_mem_elem.sr.conditional_enforce_equal(
             &Boolean::<F>::new_constant(w.cs.clone(), is_stack)?,
@@ -739,10 +749,16 @@ impl<F: PrimeField> RunningMem<F> {
         let mut fs_elems = Vec::new();
 
         for _ in 0..self.scan_per_batch {
+            println!("i in scan {}", self.i);
+            println!("wits {:#?}", w.cs.num_witness_variables());
             let (initial_mem_elem, final_mem_elem, cond) = if self.i < self.is.len() {
                 let is_wit = self.is[self.i].clone();
                 let fs_wit = self.fs[self.i].clone();
-
+                println!(
+                    "is len {:#?}, fs len {:#?}",
+                    is_wit.vals.len(),
+                    fs_wit.vals.len()
+                );
                 (
                     MemElemWires::new(
                         FpVar::new_witness(w.cs.clone(), || Ok(is_wit.time))?,
@@ -767,7 +783,17 @@ impl<F: PrimeField> RunningMem<F> {
                     Boolean::<F>::new_witness(w.cs.clone(), || Ok(true))?,
                 )
             } else {
-                let padding_wires = MemElemWires::new(
+                let padding_wires_1 = MemElemWires::new(
+                    FpVar::new_witness(w.cs.clone(), || Ok(self.padding.time))?,
+                    FpVar::new_witness(w.cs.clone(), || Ok(self.padding.addr))?,
+                    self.padding
+                        .vals
+                        .iter()
+                        .map(|v| FpVar::new_witness(w.cs.clone(), || Ok(v)))
+                        .collect::<Result<Vec<FpVar<F>>, _>>()?,
+                    Boolean::new_witness(w.cs.clone(), || Ok(self.padding.sr))?,
+                );
+                let padding_wires_2 = MemElemWires::new(
                     FpVar::new_witness(w.cs.clone(), || Ok(self.padding.time))?,
                     FpVar::new_witness(w.cs.clone(), || Ok(self.padding.addr))?,
                     self.padding
@@ -778,13 +804,16 @@ impl<F: PrimeField> RunningMem<F> {
                     Boolean::new_witness(w.cs.clone(), || Ok(self.padding.sr))?,
                 );
 
+                println!("wits {:#?}", w.cs.num_witness_variables());
+                println!("padding len {:#?}", self.padding.vals.len());
                 (
-                    padding_wires.clone(),
-                    padding_wires,
+                    padding_wires_1,
+                    padding_wires_2,
                     Boolean::<F>::new_witness(w.cs.clone(), || Ok(false))?,
                 )
             };
 
+            println!("wits {:#?}", w.cs.num_witness_variables());
             // t < ts hack
             initial_mem_elem.time.enforce_equal(&FpVar::zero())?;
 
@@ -804,6 +833,7 @@ impl<F: PrimeField> RunningMem<F> {
 
             is_elems.push(initial_mem_elem);
             fs_elems.push(final_mem_elem);
+            println!("wits {:#?}", w.cs.num_witness_variables());
         }
 
         Ok((is_elems, fs_elems))
@@ -848,7 +878,6 @@ mod tests {
     type S2 = nova_snark::spartan::snark::RelaxedR1CSSNARK<E2, EE2>;
 
     fn make_full_mem_circ(
-        //        batch_size: usize, 2
         i: usize,
         rm: &mut RunningMem<A>,
         do_rw_ops: fn(
@@ -905,6 +934,7 @@ mod tests {
 
         // doesn't matter what goes in anymore
         ivcify_stack_op(&next_mem_ops, &next_mem_ops, cs.clone()).unwrap();
+        println!("IVCIFY len {:#?}", next_mem_ops.len());
 
         let (running_is_in, running_is_out) = FpVar::new_input_output_pair(
             cs.clone(),
@@ -1151,7 +1181,7 @@ mod tests {
 
     #[test]
     fn two_stacks() {
-        let mut mb = MemBuilder::new(2, vec![3]);
+        let mut mb = MemBuilder::new(2, vec![3, 2]);
         // stack 0
         mb.init(1, vec![A::from(0), A::from(0)], Some(0));
         mb.init(2, vec![A::from(0), A::from(0)], Some(0));
@@ -1159,22 +1189,24 @@ mod tests {
         // stack 1
         mb.init(4, vec![A::from(0), A::from(0)], Some(1));
         mb.init(5, vec![A::from(0), A::from(0)], Some(1));
+        // ram
+        // mb.init(6, vec![A::from(15), A::from(16)], None);
 
         // push, pop from stack 1
         mb.push(1, vec![A::from(1), A::from(2)]);
-        assert_eq!(mb.pop(1), vec![A::from(3), A::from(4)]);
-
-        // push stack 0
-        mb.push(0, vec![A::from(5), A::from(6)]);
-        mb.push(0, vec![A::from(7), A::from(8)]);
-
-        // pop stack 0
-        assert_eq!(mb.pop(0), vec![A::from(7), A::from(8)]);
+        assert_eq!(mb.pop(1), vec![A::from(1), A::from(2)]);
 
         // push stack 0
         mb.push(0, vec![A::from(5), A::from(6)]);
 
-        // 2 iters, [push pop push] each time
+        // push, pop stack 1
+        mb.push(1, vec![A::from(7), A::from(8)]);
+        assert_eq!(mb.pop(1), vec![A::from(7), A::from(8)]);
+
+        // push stack 0
+        mb.push(0, vec![A::from(9), A::from(10)]);
+
+        // 2 iters, [push pop push] each time // 2,3
         run_ram_nova(2, 3, mb, two_stacks_circ);
     }
 
@@ -1184,25 +1216,55 @@ mod tests {
         rmw: &mut RunningMemWires<A>,
         rw_mem_ops: &mut Vec<MemElemWires<A>>,
     ) {
+        println!(
+            "START STACK PTR VALS {:#?}",
+            rmw.stack_ptrs
+                .iter()
+                .map(|w| w.value().unwrap())
+                .collect::<Vec<A>>()
+        );
+
         let (push_vals_1, push_vals_2) = if i == 0 {
-            (vec![1, 2], vec![3, 4])
+            (vec![1, 2], vec![5, 6])
         } else if i == 1 {
-            (vec![5, 6], vec![7, 8])
+            (vec![7, 8], vec![9, 10])
         } else {
             panic!()
         };
 
         let res = rm.push(
-            0,
+            1,
             push_vals_1
                 .iter()
                 .map(|v| FpVar::new_witness(rmw.cs.clone(), || Ok(A::from(*v as u64))).unwrap())
                 .collect(),
             rmw,
         );
+        println!(
+            "STACK PTR VALS {:#?}",
+            rmw.stack_ptrs
+                .iter()
+                .map(|w| w.value().unwrap())
+                .collect::<Vec<A>>()
+        );
+
         let (r, w) = res.unwrap();
         rw_mem_ops.push(r);
         rw_mem_ops.push(w);
+
+        let res = rm.pop(1, rmw);
+        println!(
+            "STACK PTR VALS {:#?}",
+            rmw.stack_ptrs
+                .iter()
+                .map(|w| w.value().unwrap())
+                .collect::<Vec<A>>()
+        );
+
+        let (r, w) = res.unwrap();
+        rw_mem_ops.push(r);
+        rw_mem_ops.push(w);
+
         let res = rm.push(
             0,
             push_vals_2
@@ -1211,11 +1273,15 @@ mod tests {
                 .collect(),
             rmw,
         );
-        let (r, w) = res.unwrap();
-        rw_mem_ops.push(r);
-        rw_mem_ops.push(w);
 
-        let res = rm.pop(0, rmw);
+        println!(
+            "STACK PTR VALS {:#?}",
+            rmw.stack_ptrs
+                .iter()
+                .map(|w| w.value().unwrap())
+                .collect::<Vec<A>>()
+        );
+
         let (r, w) = res.unwrap();
         rw_mem_ops.push(r);
         rw_mem_ops.push(w);
