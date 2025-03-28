@@ -546,7 +546,7 @@ pub struct RunningMem<F: PrimeField> {
 #[derive(Clone, Debug)]
 pub struct RunningMemWires<F: PrimeField> {
     // for multiple calls in one CS
-    cs: ConstraintSystemRef<F>,
+    pub cs: ConstraintSystemRef<F>,
     pub running_is: FpVar<F>,
     pub running_rs: FpVar<F>,
     pub running_ws: FpVar<F>,
