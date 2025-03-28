@@ -290,7 +290,12 @@ impl<F: PrimeField> MemBuilder<F> {
                 )
             } else {
                 if (i * if_batch_size) <= self.is.len() {
-                    todo!()
+                    let mut is_slice = self.is[(i * if_batch_size)..].to_vec();
+                    is_slice.extend(vec![padding.clone(); if_batch_size - is_slice.len()]);
+
+                    let mut fs_slice = fs[(i * if_batch_size)..].to_vec();
+                    fs_slice.extend(vec![padding.clone(); if_batch_size - fs_slice.len()]);
+                    (is_slice, fs_slice)
                 } else {
                     (
                         vec![padding.clone(); if_batch_size],
@@ -1142,6 +1147,78 @@ mod tests {
             println!("{}", i);
             assert_eq!(C_final[i], compressed_snark.Ci[i]);
         }
+    }
+
+    #[test]
+    fn two_stacks() {
+        let mut mb = MemBuilder::new(2, vec![3]);
+        // stack 0
+        mb.init(1, vec![A::from(0), A::from(0)], Some(0));
+        mb.init(2, vec![A::from(0), A::from(0)], Some(0));
+        mb.init(3, vec![A::from(0), A::from(0)], Some(0));
+        // stack 1
+        mb.init(4, vec![A::from(0), A::from(0)], Some(1));
+        mb.init(5, vec![A::from(0), A::from(0)], Some(1));
+
+        // push, pop from stack 1
+        mb.push(1, vec![A::from(1), A::from(2)]);
+        assert_eq!(mb.pop(1), vec![A::from(3), A::from(4)]);
+
+        // push stack 0
+        mb.push(0, vec![A::from(5), A::from(6)]);
+        mb.push(0, vec![A::from(7), A::from(8)]);
+
+        // pop stack 0
+        assert_eq!(mb.pop(0), vec![A::from(7), A::from(8)]);
+
+        // push stack 0
+        mb.push(0, vec![A::from(5), A::from(6)]);
+
+        // 2 iters, [push pop push] each time
+        run_ram_nova(2, 3, mb, two_stacks_circ);
+    }
+
+    fn two_stacks_circ(
+        i: usize,
+        rm: &mut RunningMem<A>,
+        rmw: &mut RunningMemWires<A>,
+        rw_mem_ops: &mut Vec<MemElemWires<A>>,
+    ) {
+        let (push_vals_1, push_vals_2) = if i == 0 {
+            (vec![1, 2], vec![3, 4])
+        } else if i == 1 {
+            (vec![5, 6], vec![7, 8])
+        } else {
+            panic!()
+        };
+
+        let res = rm.push(
+            0,
+            push_vals_1
+                .iter()
+                .map(|v| FpVar::new_witness(rmw.cs.clone(), || Ok(A::from(*v as u64))).unwrap())
+                .collect(),
+            rmw,
+        );
+        let (r, w) = res.unwrap();
+        rw_mem_ops.push(r);
+        rw_mem_ops.push(w);
+        let res = rm.push(
+            0,
+            push_vals_2
+                .iter()
+                .map(|v| FpVar::new_witness(rmw.cs.clone(), || Ok(A::from(*v as u64))).unwrap())
+                .collect(),
+            rmw,
+        );
+        let (r, w) = res.unwrap();
+        rw_mem_ops.push(r);
+        rw_mem_ops.push(w);
+
+        let res = rm.pop(0, rmw);
+        let (r, w) = res.unwrap();
+        rw_mem_ops.push(r);
+        rw_mem_ops.push(w);
     }
 
     #[test]
