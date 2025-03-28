@@ -650,7 +650,13 @@ impl<F: PrimeField> RunningMem<F> {
         assert_eq!(w.stack_ptrs.len(), self.stack_spaces.len() - 1);
         assert!(stack_tag < self.stack_spaces.len());
 
-        let res = self.conditional_op(cond, &w.stack_ptrs[stack_tag].clone(), Some(vals), 2, w);
+        let zero = FpVar::new_witness(w.cs.clone(), || Ok(F::zero()))?;
+        let addr = if cond.value()? {
+            w.stack_ptrs[stack_tag].clone()
+        } else {
+            zero
+        };
+        let res = self.conditional_op(cond, &addr, Some(vals), 2, w);
 
         // sp ++
         let sp = FpVar::new_witness(w.cs.clone(), || {
@@ -718,7 +724,13 @@ impl<F: PrimeField> RunningMem<F> {
         sp.conditional_enforce_equal(&(&w.stack_ptrs[stack_tag] - &FpVar::one()), &cond)?;
         w.stack_ptrs[stack_tag] = cond.select(&sp, &w.stack_ptrs[stack_tag])?;
 
-        let res = self.conditional_op(cond, &w.stack_ptrs[stack_tag].clone(), None, 2, w);
+        let zero = FpVar::new_witness(w.cs.clone(), || Ok(F::zero()))?;
+        let addr = if cond.value()? {
+            w.stack_ptrs[stack_tag].clone()
+        } else {
+            zero
+        };
+        let res = self.conditional_op(cond, &addr, None, 2, w);
 
         // boundry check
         w.stack_ptrs[stack_tag].conditional_enforce_not_equal(
@@ -767,13 +779,31 @@ impl<F: PrimeField> RunningMem<F> {
         mem_type: usize,
         w: &mut RunningMemWires<F>,
     ) -> Result<(MemElemWires<F>, MemElemWires<F>), SynthesisError> {
+        // if cond is false, this should be padding
+        if !cond.value()? {
+            assert_eq!(addr.value().unwrap(), F::zero());
+            if write_vals.is_some() {
+                write_vals
+                    .as_ref()
+                    .unwrap()
+                    .iter()
+                    .map(|w| assert_eq!(w.value().unwrap(), F::zero()));
+            }
+        }
+
         // ts = ts + 1
-        let ts = FpVar::new_witness(w.cs.clone(), || Ok((&w.ts_m1 + &FpVar::one()).value()?))?;
+        let ts = FpVar::new_witness(w.cs.clone(), || {
+            Ok(if cond.value()? {
+                w.ts_m1.value()? + F::one()
+            } else {
+                F::zero()
+            })
+        })?;
         ts.conditional_enforce_equal(&(&w.ts_m1 + &FpVar::one()), &cond)?;
         w.ts_m1 = cond.select(&ts, &w.ts_m1)?;
         self.ts = w.ts_m1.value()?;
 
-        // t < ts hack (later)
+        // t < ts hacked in other part of code
 
         // RS = RS * tup
         let read_wit = self.mem_wits.get(&addr.value()?).unwrap();
@@ -1434,6 +1464,71 @@ mod tests {
         rw_mem_ops.push(w);
 
         let res = rm.pop(0, rmw);
+        let (r, w) = res.unwrap();
+        rw_mem_ops.push(r);
+        rw_mem_ops.push(w);
+    }
+
+    #[test]
+    fn mem_conditional() {
+        let mut mb = MemBuilder::new(2, vec![]);
+        mb.init(1, vec![A::from(10), A::from(11)], MemType::PrivRAM);
+        mb.init(2, vec![A::from(12), A::from(13)], MemType::PrivRAM);
+        mb.init(3, vec![A::from(14), A::from(15)], MemType::PrivRAM);
+        mb.init(4, vec![A::from(16), A::from(17)], MemType::PrivRAM);
+
+        assert_eq!(mb.read(1, false), vec![A::from(10), A::from(11)]);
+        mb.write(2, vec![A::from(18), A::from(19)], false);
+
+        mb.pad();
+        mb.pad();
+
+        assert_eq!(mb.read(3, false), vec![A::from(14), A::from(15)]);
+        mb.write(4, vec![A::from(20), A::from(21)], false);
+
+        run_ram_nova(3, 2, mb, mem_conditional_circ);
+    }
+
+    fn mem_conditional_circ(
+        i: usize,
+        rm: &mut RunningMem<A>,
+        rmw: &mut RunningMemWires<A>,
+        rw_mem_ops: &mut Vec<MemElemWires<A>>,
+    ) {
+        let (cond_value, read_addr, write_addr, write_vals) = if i == 0 {
+            (true, 1, 2, vec![18, 19])
+        } else if i == 1 {
+            (false, 0, 0, vec![0, 0])
+        } else if i == 2 {
+            (true, 3, 4, vec![20, 21])
+        } else {
+            panic!()
+        };
+
+        let cond = Boolean::new_witness(rmw.cs.clone(), || Ok(cond_value)).unwrap();
+
+        let res = rm.conditional_read(
+            &cond,
+            &FpVar::new_witness(rmw.cs.clone(), || Ok(A::from(read_addr as u64))).unwrap(),
+            false,
+            rmw,
+        );
+        assert!(res.is_ok());
+        let (r, w) = res.unwrap();
+        rw_mem_ops.push(r);
+        rw_mem_ops.push(w);
+
+        let res = rm.conditional_write(
+            &cond,
+            &FpVar::new_witness(rmw.cs.clone(), || Ok(A::from(write_addr))).unwrap(),
+            write_vals
+                .iter()
+                .map(|v| FpVar::new_witness(rmw.cs.clone(), || Ok(A::from(*v as u64))).unwrap())
+                .collect(),
+            false,
+            rmw,
+        );
+        assert!(res.is_ok());
         let (r, w) = res.unwrap();
         rw_mem_ops.push(r);
         rw_mem_ops.push(w);
