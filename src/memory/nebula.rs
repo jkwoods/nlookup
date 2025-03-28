@@ -850,6 +850,7 @@ impl<F: PrimeField> RunningMem<F> {
         );
 
         // WS = WS * tup
+        // write mem elem sr == read mem elem sr (important to perserve this wire)
         let write_mem_elem = MemElemWires::new(ts, addr.clone(), v_prime, read_mem_elem.sr.clone());
         let next_running_ws = &w.running_ws * write_mem_elem.hash(w.cs.clone(), &w.perm_chal)?;
         w.running_ws = cond.select(&next_running_ws, &w.running_ws)?;
