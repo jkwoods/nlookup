@@ -249,6 +249,8 @@ impl<F: PrimeField> MemBuilder<F> {
 
     fn inner_init(&mut self, addr: usize, vals: Vec<F>, mem_tag: MemType) {
         assert_eq!(vals.len(), self.elem_len, "Element not correct length");
+        assert!(!self.mem.contains_key(&addr));
+
         let sr = match mem_tag {
             MemType::PrivRAM => 0,
             MemType::PubRAM => 1,
@@ -502,6 +504,7 @@ impl<F: PrimeField> MemBuilder<F> {
             priv_fs,
             &padding,
         );
+        println!("RAM HINTS {:#?}", ram_hints);
 
         let perm_chal = nova_to_ark_field::<N1, F>(&sample_challenge(&ic_cmt));
 
@@ -612,6 +615,19 @@ impl<F: PrimeField> RunningMem<F> {
                 .map(|s| F::from(*s as u64))
                 .collect()
         }
+    }
+
+    pub fn padding(&self, cs: ConstraintSystemRef<F>) -> Result<MemElemWires<F>, SynthesisError> {
+        Ok(MemElemWires::new(
+            FpVar::new_witness(cs.clone(), || Ok(self.padding.time))?,
+            FpVar::new_witness(cs.clone(), || Ok(self.padding.addr))?,
+            self.padding
+                .vals
+                .iter()
+                .map(|v| FpVar::new_witness(cs.clone(), || Ok(v)))
+                .collect::<Result<Vec<FpVar<F>>, _>>()?,
+            FpVar::new_witness(cs.clone(), || Ok(self.padding.sr))?,
+        ))
     }
 
     pub fn begin_new_circuit(
@@ -891,16 +907,7 @@ impl<F: PrimeField> RunningMem<F> {
                 )
             } else {
                 (
-                    MemElemWires::new(
-                        FpVar::new_witness(w.cs.clone(), || Ok(self.padding.time))?,
-                        FpVar::new_witness(w.cs.clone(), || Ok(self.padding.addr))?,
-                        self.padding
-                            .vals
-                            .iter()
-                            .map(|v| FpVar::new_witness(w.cs.clone(), || Ok(v)))
-                            .collect::<Result<Vec<FpVar<F>>, _>>()?,
-                        FpVar::new_witness(w.cs.clone(), || Ok(self.padding.sr))?,
-                    ),
+                    self.padding(w.cs.clone())?,
                     Boolean::new_witness(w.cs.clone(), || Ok(false))?,
                 )
             };
@@ -938,16 +945,7 @@ impl<F: PrimeField> RunningMem<F> {
                 )
             } else {
                 (
-                    MemElemWires::new(
-                        FpVar::new_witness(w.cs.clone(), || Ok(self.padding.time))?,
-                        FpVar::new_witness(w.cs.clone(), || Ok(self.padding.addr))?,
-                        self.padding
-                            .vals
-                            .iter()
-                            .map(|v| FpVar::new_witness(w.cs.clone(), || Ok(v)))
-                            .collect::<Result<Vec<FpVar<F>>, _>>()?,
-                        FpVar::new_witness(w.cs.clone(), || Ok(self.padding.sr))?,
-                    ),
+                    self.padding(w.cs.clone())?,
                     Boolean::new_witness(w.cs.clone(), || Ok(false))?,
                 )
             };
@@ -1129,7 +1127,9 @@ mod tests {
     ) -> Result<(), SynthesisError> {
         assert_eq!(prev_ops.len(), next_ops.len());
 
+        println!("IVC OP");
         for i in 0..prev_ops.len() {
+            println!("{:#?}", next_ops[i].time.value()?);
             let (time_in, time_out) = FpVar::new_input_output_pair(
                 cs.clone(),
                 || Ok(prev_ops[i].time.value()?),
@@ -1137,6 +1137,8 @@ mod tests {
             )?;
             //        prev_ops[i].time.enforce_equal(&time_in)?;
             next_ops[i].time.enforce_equal(&time_out)?;
+
+            println!("{:#?}", next_ops[i].addr.value()?);
             let (addr_in, addr_out) = FpVar::new_input_output_pair(
                 cs.clone(),
                 || Ok(prev_ops[i].addr.value()?),
@@ -1365,26 +1367,12 @@ mod tests {
                 .collect(),
             rmw,
         );
-        println!(
-            "STACK PTR VALS {:#?}",
-            rmw.stack_ptrs
-                .iter()
-                .map(|w| w.value().unwrap())
-                .collect::<Vec<A>>()
-        );
 
         let (r, w) = res.unwrap();
         rw_mem_ops.push(r);
         rw_mem_ops.push(w);
 
         let res = rm.pop(1, rmw);
-        println!(
-            "STACK PTR VALS {:#?}",
-            rmw.stack_ptrs
-                .iter()
-                .map(|w| w.value().unwrap())
-                .collect::<Vec<A>>()
-        );
 
         let (r, w) = res.unwrap();
         rw_mem_ops.push(r);
@@ -1397,14 +1385,6 @@ mod tests {
                 .map(|v| FpVar::new_witness(rmw.cs.clone(), || Ok(A::from(*v as u64))).unwrap())
                 .collect(),
             rmw,
-        );
-
-        println!(
-            "STACK PTR VALS {:#?}",
-            rmw.stack_ptrs
-                .iter()
-                .map(|w| w.value().unwrap())
-                .collect::<Vec<A>>()
         );
 
         let (r, w) = res.unwrap();
@@ -1523,6 +1503,10 @@ mod tests {
         );
         assert!(res.is_ok());
         let (r, w) = res.unwrap();
+        if !cond_value {
+            r.assert_eq(&rm.padding);
+            w.assert_eq(&rm.padding);
+        }
         rw_mem_ops.push(r);
         rw_mem_ops.push(w);
 
@@ -1538,8 +1522,30 @@ mod tests {
         );
         assert!(res.is_ok());
         let (r, w) = res.unwrap();
+        if !cond_value {
+            r.assert_eq(&rm.padding);
+            w.assert_eq(&rm.padding);
+        }
         rw_mem_ops.push(r);
         rw_mem_ops.push(w);
+    }
+
+    #[test]
+    fn mem_basic_extra_init() {
+        let mut mb = MemBuilder::new(2, vec![]);
+        mb.init(1, vec![A::from(10), A::from(11)], MemType::PrivRAM);
+        mb.init(2, vec![A::from(12), A::from(13)], MemType::PrivRAM);
+        mb.init(3, vec![A::from(14), A::from(15)], MemType::PrivRAM);
+        mb.init(4, vec![A::from(16), A::from(17)], MemType::PrivRAM);
+        mb.init(500, vec![A::from(30), A::from(40)], MemType::PubRAM);
+
+        assert_eq!(mb.read(1, false), vec![A::from(10), A::from(11)]);
+        mb.write(2, vec![A::from(18), A::from(19)], false);
+
+        assert_eq!(mb.read(3, false), vec![A::from(14), A::from(15)]);
+        mb.write(4, vec![A::from(20), A::from(21)], false);
+
+        run_ram_nova(2, 2, mb, mem_basic_circ);
     }
 
     #[test]
