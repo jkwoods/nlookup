@@ -170,7 +170,7 @@ impl<F: PrimeField> MemBuilder<F> {
             }
         }
 
-        Self {
+        let mut mb = Self {
             mem: HashMap::new(),
             pub_is: Vec::new(),
             priv_is: Vec::new(),
@@ -181,7 +181,10 @@ impl<F: PrimeField> MemBuilder<F> {
             stack_ptrs,
             elem_len,
             ts: 0,
-        }
+        };
+
+        mb.inner_init(0, vec![F::zero(); mb.elem_len], MemType::PrivRAM);
+        mb
     }
 
     pub fn pad(&mut self) {
@@ -239,8 +242,13 @@ impl<F: PrimeField> MemBuilder<F> {
     // initialize memory
     // note: if you plan on writing to an addr, it must be initialized
     pub fn init(&mut self, addr: usize, vals: Vec<F>, mem_tag: MemType) {
-        assert_eq!(vals.len(), self.elem_len, "Element not correct length");
         assert_ne!(addr, 0);
+
+        self.inner_init(addr, vals, mem_tag);
+    }
+
+    fn inner_init(&mut self, addr: usize, vals: Vec<F>, mem_tag: MemType) {
+        assert_eq!(vals.len(), self.elem_len, "Element not correct length");
         let sr = match mem_tag {
             MemType::PrivRAM => 0,
             MemType::PubRAM => 1,
@@ -456,7 +464,6 @@ impl<F: PrimeField> MemBuilder<F> {
         );
 
         let mut mem_wits = HashMap::new();
-        mem_wits.insert(F::zero(), padding.clone());
         for elem in &self.pub_is {
             mem_wits.insert(elem.addr, elem.clone());
         }
@@ -787,7 +794,7 @@ impl<F: PrimeField> RunningMem<F> {
                     .as_ref()
                     .unwrap()
                     .iter()
-                    .map(|w| assert_eq!(w.value().unwrap(), F::zero()));
+                    .for_each(|w| assert_eq!(w.value().unwrap(), F::zero()));
             }
         }
 
