@@ -662,10 +662,11 @@ impl<F: PrimeField> RunningMem<F> {
         })
     }
 
-    pub fn conditional_push(
+    fn inner_conditional_push(
         &mut self,
         cond: &Boolean<F>,
         stack_tag: usize, // which stack (0, 1, 2, etc)
+        addr: &FpVar<F>,
         vals: Vec<FpVar<F>>,
         w: &mut RunningMemWires<F>,
     ) -> Result<(MemElemWires<F>, MemElemWires<F>), SynthesisError> {
@@ -673,12 +674,6 @@ impl<F: PrimeField> RunningMem<F> {
         assert_eq!(w.stack_ptrs.len(), self.stack_spaces.len() - 1);
         assert!(stack_tag < self.stack_spaces.len());
 
-        let zero = FpVar::new_witness(w.cs.clone(), || Ok(F::zero()))?;
-        let addr = if cond.value()? {
-            w.stack_ptrs[stack_tag].clone()
-        } else {
-            zero
-        };
         let res = self.conditional_op(cond, &addr, Some(vals), 2, w);
 
         // sp ++
@@ -700,16 +695,35 @@ impl<F: PrimeField> RunningMem<F> {
         res
     }
 
+    pub fn conditional_push(
+        &mut self,
+        cond: &Boolean<F>,
+        stack_tag: usize, // which stack (0, 1, 2, etc)
+        vals: Vec<FpVar<F>>,
+        w: &mut RunningMemWires<F>,
+    ) -> Result<(MemElemWires<F>, MemElemWires<F>), SynthesisError> {
+        let zero = FpVar::new_witness(w.cs.clone(), || Ok(F::zero()))?;
+        let pad_addr = cond.select(&w.stack_ptrs[stack_tag], &zero)?;
+        let pad_vals = vals
+            .iter()
+            .map(|v| cond.select(v, &zero))
+            .collect::<Result<Vec<FpVar<F>>, SynthesisError>>()?;
+
+        self.inner_conditional_push(cond, stack_tag, &pad_addr, pad_vals, w)
+    }
+
     pub fn push(
         &mut self,
         stack_tag: usize, // which stack (0, 1, 2, etc)
         vals: Vec<FpVar<F>>,
         w: &mut RunningMemWires<F>,
     ) -> Result<(MemElemWires<F>, MemElemWires<F>), SynthesisError> {
-        self.conditional_push(&Boolean::TRUE, stack_tag, vals, w)
+        let addr = w.stack_ptrs[stack_tag].clone();
+
+        self.inner_conditional_push(&Boolean::TRUE, stack_tag, &addr, vals, w)
     }
 
-    pub fn conditional_write(
+    fn inner_conditional_write(
         &mut self,
         cond: &Boolean<F>,
         addr: &FpVar<F>,
@@ -720,6 +734,25 @@ impl<F: PrimeField> RunningMem<F> {
         self.conditional_op(cond, addr, Some(vals), if public { 1 } else { 0 }, w)
     }
 
+    pub fn conditional_write(
+        &mut self,
+        cond: &Boolean<F>,
+        addr: &FpVar<F>,
+        vals: Vec<FpVar<F>>,
+        public: bool,
+        w: &mut RunningMemWires<F>,
+    ) -> Result<(MemElemWires<F>, MemElemWires<F>), SynthesisError> {
+        let zero = FpVar::new_witness(w.cs.clone(), || Ok(F::zero()))?;
+
+        let pad_addr = cond.select(addr, &zero)?;
+        let pad_vals = vals
+            .iter()
+            .map(|v| cond.select(v, &zero))
+            .collect::<Result<Vec<FpVar<F>>, SynthesisError>>()?;
+
+        self.inner_conditional_write(cond, &pad_addr, pad_vals, public, w)
+    }
+
     pub fn write(
         &mut self,
         addr: &FpVar<F>,
@@ -727,12 +760,22 @@ impl<F: PrimeField> RunningMem<F> {
         public: bool,
         w: &mut RunningMemWires<F>,
     ) -> Result<(MemElemWires<F>, MemElemWires<F>), SynthesisError> {
-        self.conditional_write(&Boolean::TRUE, addr, vals, public, w)
+        self.inner_conditional_write(&Boolean::TRUE, addr, vals, public, w)
     }
 
     pub fn conditional_pop(
         &mut self,
         cond: &Boolean<F>,
+        stack_tag: usize, // which stack (0, 1, 2, etc)
+        w: &mut RunningMemWires<F>,
+    ) -> Result<(MemElemWires<F>, MemElemWires<F>), SynthesisError> {
+        self.inner_conditional_pop(cond, true, stack_tag, w)
+    }
+
+    fn inner_conditional_pop(
+        &mut self,
+        cond: &Boolean<F>,
+        true_conditional: bool,
         stack_tag: usize, // which stack (0, 1, 2, etc)
         w: &mut RunningMemWires<F>,
     ) -> Result<(MemElemWires<F>, MemElemWires<F>), SynthesisError> {
@@ -748,12 +791,12 @@ impl<F: PrimeField> RunningMem<F> {
         w.stack_ptrs[stack_tag] = cond.select(&sp, &w.stack_ptrs[stack_tag])?;
 
         let zero = FpVar::new_witness(w.cs.clone(), || Ok(F::zero()))?;
-        let addr = if cond.value()? {
-            w.stack_ptrs[stack_tag].clone()
+        let pad_addr = if true_conditional {
+            cond.select(&w.stack_ptrs[stack_tag], &zero)?
         } else {
-            zero
+            w.stack_ptrs[stack_tag].clone()
         };
-        let res = self.conditional_op(cond, &addr, None, 2, w);
+        let res = self.conditional_op(cond, &pad_addr, None, 2, w);
 
         // boundry check
         w.stack_ptrs[stack_tag].conditional_enforce_not_equal(
@@ -772,10 +815,11 @@ impl<F: PrimeField> RunningMem<F> {
         stack_tag: usize, // which stack (0, 1, 2, etc)
         w: &mut RunningMemWires<F>,
     ) -> Result<(MemElemWires<F>, MemElemWires<F>), SynthesisError> {
-        self.conditional_pop(&Boolean::TRUE, stack_tag, w)
+        let addr = w.stack_ptrs[stack_tag].clone();
+        self.inner_conditional_pop(&Boolean::TRUE, false, stack_tag, w)
     }
 
-    pub fn conditional_read(
+    fn inner_conditional_read(
         &mut self,
         cond: &Boolean<F>,
         addr: &FpVar<F>,
@@ -785,13 +829,26 @@ impl<F: PrimeField> RunningMem<F> {
         self.conditional_op(cond, addr, None, if public { 1 } else { 0 }, w)
     }
 
+    pub fn conditional_read(
+        &mut self,
+        cond: &Boolean<F>,
+        addr: &FpVar<F>,
+        public: bool,
+        w: &mut RunningMemWires<F>,
+    ) -> Result<(MemElemWires<F>, MemElemWires<F>), SynthesisError> {
+        let zero = FpVar::new_witness(w.cs.clone(), || Ok(F::zero()))?;
+        let pad_addr = cond.select(addr, &zero)?;
+
+        self.inner_conditional_read(cond, &pad_addr, public, w)
+    }
+
     pub fn read(
         &mut self,
         addr: &FpVar<F>,
         public: bool,
         w: &mut RunningMemWires<F>,
     ) -> Result<(MemElemWires<F>, MemElemWires<F>), SynthesisError> {
-        self.conditional_read(&Boolean::TRUE, addr, public, w)
+        self.inner_conditional_read(&Boolean::TRUE, addr, public, w)
     }
 
     fn conditional_op(
@@ -1048,9 +1105,11 @@ mod tests {
         for mo in &rw_mem_ops {
             mo.print_vals();
         }
+        println!("INIT");
         for mo in &next_mem_ops {
             mo.print_vals();
         }
+        println!("FINAL");
         for mo in &f {
             mo.print_vals();
         }
@@ -1127,8 +1186,8 @@ mod tests {
     ) -> Result<(), SynthesisError> {
         assert_eq!(prev_ops.len(), next_ops.len());
 
-        println!("IVC OP");
         for i in 0..prev_ops.len() {
+            println!("IVC OP");
             println!("{:#?}", next_ops[i].time.value()?);
             let (time_in, time_out) = FpVar::new_input_output_pair(
                 cs.clone(),
@@ -1487,6 +1546,79 @@ mod tests {
             (true, 1, 2, vec![18, 19])
         } else if i == 1 {
             (false, 0, 0, vec![0, 0])
+        } else if i == 2 {
+            (true, 3, 4, vec![20, 21])
+        } else {
+            panic!()
+        };
+
+        let cond = Boolean::new_witness(rmw.cs.clone(), || Ok(cond_value)).unwrap();
+
+        let res = rm.conditional_read(
+            &cond,
+            &FpVar::new_witness(rmw.cs.clone(), || Ok(A::from(read_addr as u64))).unwrap(),
+            false,
+            rmw,
+        );
+        assert!(res.is_ok());
+        let (r, w) = res.unwrap();
+        if !cond_value {
+            r.assert_eq(&rm.padding);
+            w.assert_eq(&rm.padding);
+        }
+        rw_mem_ops.push(r);
+        rw_mem_ops.push(w);
+
+        let res = rm.conditional_write(
+            &cond,
+            &FpVar::new_witness(rmw.cs.clone(), || Ok(A::from(write_addr))).unwrap(),
+            write_vals
+                .iter()
+                .map(|v| FpVar::new_witness(rmw.cs.clone(), || Ok(A::from(*v as u64))).unwrap())
+                .collect(),
+            false,
+            rmw,
+        );
+        assert!(res.is_ok());
+        let (r, w) = res.unwrap();
+        if !cond_value {
+            r.assert_eq(&rm.padding);
+            w.assert_eq(&rm.padding);
+        }
+        rw_mem_ops.push(r);
+        rw_mem_ops.push(w);
+    }
+
+    #[test]
+    fn mem_conditional_placeholder_addr() {
+        let mut mb = MemBuilder::new(2, vec![]);
+        mb.init(1, vec![A::from(10), A::from(11)], MemType::PrivRAM);
+        mb.init(2, vec![A::from(12), A::from(13)], MemType::PrivRAM);
+        mb.init(3, vec![A::from(14), A::from(15)], MemType::PrivRAM);
+        mb.init(4, vec![A::from(16), A::from(17)], MemType::PrivRAM);
+
+        assert_eq!(mb.read(1, false), vec![A::from(10), A::from(11)]);
+        mb.write(2, vec![A::from(18), A::from(19)], false);
+
+        mb.pad();
+        mb.pad();
+
+        assert_eq!(mb.read(3, false), vec![A::from(14), A::from(15)]);
+        mb.write(4, vec![A::from(20), A::from(21)], false);
+
+        run_ram_nova(3, 2, mb, mem_conditional_addr_circ);
+    }
+
+    fn mem_conditional_addr_circ(
+        i: usize,
+        rm: &mut RunningMem<A>,
+        rmw: &mut RunningMemWires<A>,
+        rw_mem_ops: &mut Vec<MemElemWires<A>>,
+    ) {
+        let (cond_value, read_addr, write_addr, write_vals) = if i == 0 {
+            (true, 1, 2, vec![18, 19])
+        } else if i == 1 {
+            (false, 16, 2, vec![20, 40])
         } else if i == 2 {
             (true, 3, 4, vec![20, 21])
         } else {
