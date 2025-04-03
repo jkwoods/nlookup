@@ -881,7 +881,9 @@ impl<F: PrimeField> RunningMem<F> {
         })?;
         ts.conditional_enforce_equal(&(&w.ts_m1 + &FpVar::one()), &cond)?;
         w.ts_m1 = cond.select(&ts, &w.ts_m1)?;
-        self.ts = w.ts_m1.value()?;
+        if cond.value()? {
+            self.ts = w.ts_m1.value()?;
+        }
 
         // t < ts hacked in other part of code
 
