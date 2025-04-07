@@ -1,5 +1,6 @@
-//pub mod hyrax_commitment;
+#![feature(trait_alias)]
+
 pub mod bellpepper;
 pub mod memory;
-pub mod nlookup;
+//pub mod nlookup;
 pub mod utils;

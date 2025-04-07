@@ -1,7 +1,6 @@
 use crate::bellpepper::{ark_to_nova_field, nova_to_ark_field};
 use crate::utils::*;
-use ark_ff::PrimeField;
-use ark_ff::PrimeField as arkPrimeField;
+use ark_ff::{BigInteger256, PrimeField};
 use ark_r1cs_std::{
     alloc::AllocVar,
     boolean::Boolean,
@@ -20,15 +19,17 @@ use nova_snark::{
 };
 use std::collections::HashMap;
 
+trait arkPrimeField = PrimeField<BigInt = BigInteger256>;
+
 #[derive(Clone, Debug, PartialEq)]
-pub struct MemElem<F: PrimeField> {
+pub struct MemElem<F: arkPrimeField> {
     pub time: F,
     pub addr: F,
     pub vals: Vec<F>,
     pub sr: F, // private ram = 0, public (init) ram = 1, public (init) stack = 2
 }
 
-impl<F: PrimeField> MemElem<F> {
+impl<F: arkPrimeField> MemElem<F> {
     pub fn new_u(t: usize, a: usize, v: Vec<usize>, sr: usize) -> Self {
         assert!(sr <= 2);
         MemElem {
@@ -68,14 +69,14 @@ impl<F: PrimeField> MemElem<F> {
 }
 
 #[derive(Clone, Debug)]
-pub struct MemElemWires<F: PrimeField> {
+pub struct MemElemWires<F: arkPrimeField> {
     pub time: FpVar<F>,
     pub addr: FpVar<F>,
     pub vals: Vec<FpVar<F>>,
     pub sr: FpVar<F>,
 }
 
-impl<F: PrimeField> MemElemWires<F> {
+impl<F: arkPrimeField> MemElemWires<F> {
     pub fn new(t: FpVar<F>, a: FpVar<F>, v: Vec<FpVar<F>>, sr: FpVar<F>) -> Self {
         MemElemWires {
             time: t,
@@ -139,7 +140,7 @@ pub enum MemType {
 
 // builds the witness for RunningMem
 #[derive(Debug)]
-pub struct MemBuilder<F: PrimeField> {
+pub struct MemBuilder<F: arkPrimeField> {
     mem: HashMap<usize, MemElem<F>>,
     pub_is: Vec<MemElem<F>>,
     priv_is: Vec<MemElem<F>>,
@@ -152,7 +153,7 @@ pub struct MemBuilder<F: PrimeField> {
     ts: usize,
 }
 
-impl<F: PrimeField> MemBuilder<F> {
+impl<F: arkPrimeField> MemBuilder<F> {
     pub fn new(elem_len: usize, stack_sizes: Vec<usize>) -> Self {
         assert!(elem_len > 0);
 
@@ -534,7 +535,7 @@ impl<F: PrimeField> MemBuilder<F> {
 }
 
 #[derive(Clone, Debug)]
-pub struct RunningMem<F: PrimeField> {
+pub struct RunningMem<F: arkPrimeField> {
     priv_is: Vec<MemElem<F>>,
     pub_is: Vec<MemElem<F>>,
     mem_wits: HashMap<F, MemElem<F>>,
@@ -554,7 +555,7 @@ pub struct RunningMem<F: PrimeField> {
 }
 
 #[derive(Clone, Debug)]
-pub struct RunningMemWires<F: PrimeField> {
+pub struct RunningMemWires<F: arkPrimeField> {
     // for multiple calls in one CS
     pub cs: ConstraintSystemRef<F>,
     pub running_is: FpVar<F>,
@@ -566,7 +567,7 @@ pub struct RunningMemWires<F: PrimeField> {
     pub stack_ptrs: Vec<FpVar<F>>,
 }
 
-impl<F: PrimeField> RunningMem<F> {
+impl<F: arkPrimeField> RunningMem<F> {
     pub fn get_dummy(&self) -> Self {
         let mut mem_wits = self.mem_wits.clone();
         for (_, elem) in mem_wits.iter_mut() {
@@ -1062,7 +1063,7 @@ mod tests {
     type S1 = nova_snark::spartan::snark::RelaxedR1CSSNARK<E1, EE1>;
     type S2 = nova_snark::spartan::snark::RelaxedR1CSSNARK<E2, EE2>;
 
-    fn make_full_mem_circ(
+    fn make_full_mem_circ<'a>(
         i: usize,
         rm: &mut RunningMem<A>,
         do_rw_ops: fn(
@@ -1076,7 +1077,7 @@ mod tests {
         running_ws: &mut A,
         running_fs: &mut A,
         stack_ptrs: &mut Vec<A>,
-    ) -> FCircuit<N1> {
+    ) -> FCircuit<'a, N1> {
         let cs = ConstraintSystem::<A>::new_ref();
         cs.set_optimization_goal(OptimizationGoal::Constraints);
 
@@ -1179,7 +1180,7 @@ mod tests {
             .map(|f| f.value().unwrap())
             .collect();
 
-        FCircuit::new(cs)
+        FCircuit::new(cs, None)
     }
     pub fn ivcify_stack_op(
         prev_ops: &Vec<MemElemWires<A>>,

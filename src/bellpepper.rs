@@ -1,4 +1,4 @@
-use ark_ff::{BigInteger, Field as arkField, PrimeField as arkPrimeField};
+use ark_ff::{BigInteger, BigInteger256, Field as arkField, PrimeField as arkPrimeField};
 use ark_r1cs_std::{
     alloc::{AllocVar, AllocationMode},
     boolean::Boolean,
@@ -10,7 +10,10 @@ use bellpepper_core::{
 };
 use core::borrow::Borrow;
 use ff::{Field as novaField, PrimeField as novaPrimeField};
+use itertools::Either;
 use nova_snark::traits::circuit::StepCircuit;
+use rayon::iter::ParallelBridge;
+use rayon::prelude::*;
 
 pub trait AllocIoVar<V: ?Sized, A: arkField>: Sized + AllocVar<V, A> {
     /// Allocates a new input/output pair of type `Self` in the `ConstraintSystem`
@@ -30,15 +33,28 @@ pub trait AllocIoVar<V: ?Sized, A: arkField>: Sized + AllocVar<V, A> {
 impl<A: arkField> AllocIoVar<bool, A> for Boolean<A> {}
 impl<A: arkPrimeField> AllocIoVar<A, A> for FpVar<A> {}
 
-pub fn ark_to_nova_field<A: arkPrimeField, N: novaPrimeField<Repr = [u8; 32]>>(ark_ff: &A) -> N {
+pub fn ark_to_nova_field<
+    A: arkPrimeField<BigInt = BigInteger256>,
+    N: novaPrimeField<Repr = [u8; 32]>,
+>(
+    ark_ff: &A,
+) -> N {
     // ark F -> ark BigInt
     let b = ark_ff.into_bigint();
 
     // BigInt -> bytes
-    let bytes = b.to_bytes_le();
+    let bytes = u64x4_to_u8x32(&b.0);
 
     // bytes -> nova F
     N::from_repr(TryInto::<[u8; 32]>::try_into(bytes).unwrap()).unwrap()
+}
+
+fn u64x4_to_u8x32(input: &[u64; 4]) -> [u8; 32] {
+    let mut output = [0u8; 32];
+    for (chunk, &val) in output.chunks_mut(8).zip(input) {
+        chunk.copy_from_slice(&val.to_le_bytes());
+    }
+    output
 }
 
 pub fn nova_to_ark_field<N: novaPrimeField<Repr = [u8; 32]>, A: arkPrimeField>(nova_ff: &N) -> A {
@@ -76,19 +92,24 @@ fn bellpepper_lc<N: novaPrimeField, CS: ConstraintSystem<N>>(
 }
 
 #[derive(Clone, Debug)]
-pub struct FCircuit<N: novaPrimeField<Repr = [u8; 32]>> {
-    //ark_matrices: Vec<ConstraintMatrices<F>>,
-    lcs: Vec<(Vec<(N, usize)>, Vec<(N, usize)>, Vec<(N, usize)>)>,
+pub struct FCircuit<'a, N: novaPrimeField<Repr = [u8; 32]>> {
+    lcs: Either<
+        Vec<(Vec<(N, usize)>, Vec<(N, usize)>, Vec<(N, usize)>)>,
+        &'a Vec<(Vec<(N, usize)>, Vec<(N, usize)>, Vec<(N, usize)>)>,
+    >,
     wit_assignments: Vec<N>,
     input_assignments: Vec<N>,
     output_assignments: Vec<N>,
 }
 
-impl<N: novaPrimeField<Repr = [u8; 32]>> FCircuit<N> {
+impl<'a, N: novaPrimeField<Repr = [u8; 32]>> FCircuit<'a, N> {
     // make circuits and witnesses for round i
     // the ark_cs should only have witness and input/output PAIRs
     // (i.e. a user should have never called new_input())
-    pub fn new<A: arkPrimeField>(ark_cs_ref: ConstraintSystemRef<A>) -> Self {
+    pub fn new<A: arkPrimeField<BigInt = BigInteger256>>(
+        ark_cs_ref: ConstraintSystemRef<A>,
+        saved_nova_matrices: Option<&'a Vec<(Vec<(N, usize)>, Vec<(N, usize)>, Vec<(N, usize)>)>>,
+    ) -> Self {
         ark_cs_ref.finalize();
         assert!(ark_cs_ref.is_satisfied().unwrap());
 
@@ -98,43 +119,63 @@ impl<N: novaPrimeField<Repr = [u8; 32]>> FCircuit<N> {
         assert_eq!(ark_cs.instance_assignment[0], A::one());
         assert_eq!(ark_cs.instance_assignment.len() % 2, 1);
 
-        let mut input_assignments = Vec::new();
-        let mut output_assignments = Vec::new();
-        for (i, io) in ark_cs.instance_assignment.iter().skip(1).enumerate() {
-            if i % 2 == 0 {
-                // input
-                input_assignments.push(ark_to_nova_field(io));
-            } else {
-                // output
-                output_assignments.push(ark_to_nova_field(io));
-            }
-        }
+        let input_assignments = ark_cs.instance_assignment[1..]
+            .par_iter()
+            .step_by(2)
+            .map(|io| ark_to_nova_field(io))
+            .collect();
 
+        let output_assignments = ark_cs.instance_assignment[2..]
+            .par_iter()
+            .step_by(2)
+            .map(|io| ark_to_nova_field(io))
+            .collect();
+
+        /*
+                let mut input_assignments = Vec::new();
+                let mut output_assignments = Vec::new();
+                for (i, io) in ark_cs.instance_assignment.par_iter().skip(1).enumerate() {
+                    if i % 2 == 0 {
+                        // input
+                        input_assignments.push(ark_to_nova_field(io));
+                    } else {
+                        // output
+                        output_assignments.push(ark_to_nova_field(io));
+                    }
+                }
+        */
         let wit_assignments: Vec<N> = ark_cs
             .witness_assignment
-            .iter()
+            .par_iter()
             .map(|f| ark_to_nova_field(f))
             .collect();
 
         let ark_matrices = ark_cs.to_matrices().unwrap();
 
-        let mut lcs = Vec::new();
-        for i in 0..ark_matrices.a.len() {
-            lcs.push((
-                ark_matrices.a[i]
-                    .iter()
-                    .map(|(val, index)| (ark_to_nova_field(val), *index))
-                    .collect(),
-                ark_matrices.b[i]
-                    .iter()
-                    .map(|(val, index)| (ark_to_nova_field(val), *index))
-                    .collect(),
-                ark_matrices.c[i]
-                    .iter()
-                    .map(|(val, index)| (ark_to_nova_field(val), *index))
-                    .collect(),
-            ));
-        }
+        let lcs = if saved_nova_matrices.is_some() {
+            Either::Right(saved_nova_matrices.unwrap())
+        } else {
+            let lcs = (0..ark_matrices.a.len())
+                .into_par_iter()
+                .map(|i| {
+                    (
+                        ark_matrices.a[i]
+                            .par_iter()
+                            .map(|(val, index)| (ark_to_nova_field(val), *index))
+                            .collect(),
+                        ark_matrices.b[i]
+                            .par_iter()
+                            .map(|(val, index)| (ark_to_nova_field(val), *index))
+                            .collect(),
+                        ark_matrices.c[i]
+                            .par_iter()
+                            .map(|(val, index)| (ark_to_nova_field(val), *index))
+                            .collect(),
+                    )
+                })
+                .collect();
+            Either::Left(lcs)
+        };
 
         FCircuit {
             lcs,
@@ -154,7 +195,7 @@ impl<N: novaPrimeField<Repr = [u8; 32]>> FCircuit<N> {
     }
 }
 
-impl<N: novaPrimeField<Repr = [u8; 32]>> StepCircuit<N> for FCircuit<N> {
+impl<'a, N: novaPrimeField<Repr = [u8; 32]>> StepCircuit<N> for FCircuit<'a, N> {
     fn arity(&self) -> usize {
         self.output_assignments.len()
     }
@@ -166,69 +207,55 @@ impl<N: novaPrimeField<Repr = [u8; 32]>> StepCircuit<N> for FCircuit<N> {
     ) -> Result<Vec<AllocatedNum<N>>, bpSynthesisError> {
         // input already allocated in z
         assert_eq!(z.len(), self.input_assignments.len());
-        // println!("_______________");
-        // println!("{:?}", self);
-
-        //        println!("z_in fc {:?}", z);
 
         // alloc outputs
-        let mut alloc_out = Vec::new();
-        for (i, v) in self.output_assignments.iter().enumerate() {
-            alloc_out.push(AllocatedNum::alloc(
-                cs.namespace(|| format!("out {}", i)),
-                || Ok(*v),
-            )?)
-        }
+        let alloc_out = self
+            .output_assignments
+            .iter()
+            .enumerate()
+            .map(|(i, v)| AllocatedNum::alloc(cs.namespace(|| format!("out {}", i)), || Ok(*v)))
+            .collect::<Result<Vec<AllocatedNum<N>>, bpSynthesisError>>()?;
 
         // combine io
-        let mut alloc_io = Vec::new();
-        let mut temp_io: Vec<N> = Vec::new();
-        for i in 0..(self.input_assignments.len() + self.output_assignments.len()) {
-            if i % 2 == 0 {
-                // input
-                alloc_io.push(z[i / 2].clone());
-                if z[i / 2].get_value().is_some() {
-                    temp_io.push(z[i / 2].get_value().unwrap());
+        let alloc_io = z
+            .par_iter()
+            .zip(alloc_out.par_iter())
+            .flat_map(|(zi, oi)| [zi.clone(), oi.clone()])
+            .collect::<Vec<AllocatedNum<N>>>();
+        /*
+                let mut alloc_io = Vec::new();
+                for i in 0..(self.input_assignments.len() + self.output_assignments.len()) {
+                    if i % 2 == 0 {
+                        // input
+                        alloc_io.push(z[i / 2].clone());
+                    } else {
+                        // output
+                        alloc_io.push(alloc_out[(i - 1) / 2].clone()); // TODO?
+                    }
                 }
-            } else {
-                // output
-                alloc_io.push(alloc_out[(i - 1) / 2].clone()); // TODO?
-                if alloc_out[(i - 1) / 2].get_value().is_some() {
-                    temp_io.push(alloc_out[(i - 1) / 2].get_value().unwrap());
-                }
-            }
-        }
-
+        */
         // allocate all wits
-        let mut alloc_wits = Vec::new();
-        for (i, w) in self.wit_assignments.iter().enumerate() {
-            alloc_wits.push(AllocatedNum::alloc(
-                cs.namespace(|| format!("wit {}", i)),
-                || Ok(*w),
-            )?)
-        }
+        let alloc_wits = self
+            .wit_assignments
+            .iter()
+            .enumerate()
+            .map(|(i, w)| AllocatedNum::alloc(cs.namespace(|| format!("wit {}", i)), || Ok(*w)))
+            .collect::<Result<Vec<AllocatedNum<N>>, bpSynthesisError>>()?;
 
         // add constraints
-        for (i, (a, b, c)) in self.lcs.iter().enumerate() {
+
+        let lcs = match &self.lcs {
+            Either::Left(lcs) => lcs,
+            Either::Right(lcs) => lcs,
+        };
+        // do not parallelize - cs not shared b/w threads
+        lcs.iter().enumerate().for_each(|(i, (a, b, c))| {
             let a_lc = bellpepper_lc::<N, CS>(&alloc_io, &alloc_wits, a, i);
             let b_lc = bellpepper_lc::<N, CS>(&alloc_io, &alloc_wits, b, i);
             let c_lc = bellpepper_lc::<N, CS>(&alloc_io, &alloc_wits, c, i);
 
-            // if temp_io.len() > 0 {
-            // let mut a_eval = a_lc.clone().eval(&temp_io, &&self.wit_assignments);
-            // let mut b_eval = b_lc.clone().eval(&temp_io, &&self.wit_assignments);
-            // let mut c_eval = c_lc.clone().eval(&temp_io, &&self.wit_assignments);
-            // a_eval.mul_assign(&b_eval);
-
-            // if a_eval != c_eval {
-            //     println!("{:#?}", i);
-            // }
-            // }
-
             cs.enforce(|| format!("con{}", i), |_| a_lc, |_| b_lc, |_| c_lc);
-        }
-
-        //      println!("z_out fc {:?}", alloc_out);
+        });
 
         Ok(alloc_out)
     }
@@ -238,7 +265,6 @@ impl<N: novaPrimeField<Repr = [u8; 32]>> StepCircuit<N> for FCircuit<N> {
 mod tests {
 
     use crate::bellpepper::*;
-    use crate::nlookup::*;
     use ark_ff::{BigInt, One, Zero};
     use ark_r1cs_std::eq::EqGadget;
     use ark_r1cs_std::R1CSVar;
@@ -257,6 +283,7 @@ mod tests {
     use rand::{rngs::OsRng, RngCore};
 
     type NG = pasta_curves::pallas::Point;
+    type NS = <NG as Group>::Scalar;
     type AF = ark_pallas::Fr;
 
     type E1 = nova_snark::provider::PallasEngine;
@@ -270,31 +297,28 @@ mod tests {
     fn ff_convert() {
         for v in vec![0, 1, 13, std::u64::MAX] {
             let ark_val = AF::from(v);
-            let nova_val: <NG as Group>::Scalar = ark_to_nova_field(&ark_val);
-            assert_eq!(nova_val, <NG as Group>::Scalar::from(v));
+            let nova_val: NS = ark_to_nova_field(&ark_val);
+            assert_eq!(nova_val, NS::from(v));
         }
 
         // modulus
         let mut biggest = AF::MODULUS;
         biggest.sub_with_borrow(&BigInt::from(1u64));
         let ark_biggest: AF = biggest.into();
-        let nova_val: <NG as Group>::Scalar = ark_to_nova_field(&ark_biggest);
-        assert_eq!(
-            nova_val,
-            <NG as Group>::Scalar::ZERO - <NG as Group>::Scalar::ONE
-        );
+        let nova_val: NS = ark_to_nova_field(&ark_biggest);
+        assert_eq!(nova_val, NS::ZERO - NS::ONE);
     }
 
     #[test]
     fn ff_reverse_convert() {
         for v in vec![0, 1, 13, std::u64::MAX] {
-            let nova_val = <NG as Group>::Scalar::from(v);
+            let nova_val = NS::from(v);
             let ark_val: AF = nova_to_ark_field(&nova_val);
             assert_eq!(ark_val, AF::from(v));
         }
 
         // modulus
-        let nova_biggest = <NG as Group>::Scalar::ZERO - <NG as Group>::Scalar::ONE;
+        let nova_biggest = NS::ZERO - NS::ONE;
         let ark_val: AF = nova_to_ark_field(&nova_biggest);
         assert_eq!(ark_val, AF::zero() - AF::one());
     }
@@ -306,13 +330,13 @@ mod tests {
             OsRng.fill_bytes(&mut bytes);
 
             let ark_rand = AF::from_random_bytes(&bytes).unwrap();
-            let n: <NG as Group>::Scalar = ark_to_nova_field(&ark_rand);
+            let n: NS = ark_to_nova_field(&ark_rand);
             let a: AF = nova_to_ark_field(&n);
             assert_eq!(ark_rand, a);
 
-            let nova_rand = <NG as Group>::Scalar::random(&mut OsRng);
+            let nova_rand = NS::random(&mut OsRng);
             let a: AF = nova_to_ark_field(&nova_rand);
-            let n: <NG as Group>::Scalar = ark_to_nova_field(&a);
+            let n: NS = ark_to_nova_field(&a);
             assert_eq!(nova_rand, n);
         }
     }
@@ -328,7 +352,12 @@ mod tests {
         run_nova(make_circuit_1, zi_list, 3);
     }
 
-    fn make_circuit_1(z_in: &Vec<AF>) -> FCircuit<<NG as Group>::Scalar> {
+    fn make_circuit_1<'a>(
+        z_in: &Vec<AF>,
+        saved_nova_matrices: Option<
+            &'a Vec<(Vec<(NS, usize)>, Vec<(NS, usize)>, Vec<(NS, usize)>)>,
+        >,
+    ) -> FCircuit<'a, NS> {
         let cs = ConstraintSystem::<AF>::new_ref();
 
         let two = AF::one() + AF::one();
@@ -350,24 +379,30 @@ mod tests {
         // (b_in + a_in) * w = b_out
         b_out.enforce_equal(&((b_in + a_in) * w)).unwrap();
 
-        FCircuit::new(cs)
+        FCircuit::new(cs, saved_nova_matrices)
     }
 
     fn run_nova(
-        make_ark_circuit: fn(&Vec<AF>) -> FCircuit<<NG as Group>::Scalar>,
+        make_ark_circuit: for<'a> fn(
+            &Vec<AF>,
+            Option<&'a Vec<(Vec<(NS, usize)>, Vec<(NS, usize)>, Vec<(NS, usize)>)>>,
+        ) -> FCircuit<'a, NS>,
         zi_list: Vec<Vec<AF>>,
         num_steps: usize,
-    ) -> Vec<<NG as Group>::Scalar> {
+    ) -> Vec<NS> {
         let circuit_secondary = TrivialCircuit::default();
-        let mut circuit_primary = make_ark_circuit(&zi_list[0]);
+        let mut circuit_primary = make_ark_circuit(&zi_list[0], None);
+        // JUST ONE CLONE!
+        let saved_nova_matrices = circuit_primary.lcs.clone().left().unwrap();
+        let nm_ref = &saved_nova_matrices;
 
         let z0_primary = circuit_primary.get_zi().clone();
         assert_eq!(
             z0_primary,
             zi_list[0]
                 .iter()
-                .map(|f| ark_to_nova_field::<AF, <NG as Group>::Scalar>(f))
-                .collect::<Vec<<NG as Group>::Scalar>>()
+                .map(|f| ark_to_nova_field::<AF, NS>(f))
+                .collect::<Vec<NS>>()
         );
 
         // produce public parameters
@@ -408,7 +443,7 @@ mod tests {
                 recursive_snark.prove_step(&pp, &circuit_primary, &circuit_secondary, None, vec![]);
             assert!(res.is_ok());
             res.unwrap();
-            circuit_primary = make_ark_circuit(&zi_list[i + 1]);
+            circuit_primary = make_ark_circuit(&zi_list[i + 1], Some(nm_ref));
         }
 
         // verify the recursive SNARK
@@ -421,8 +456,8 @@ mod tests {
             zn_primary,
             zi_list[num_steps]
                 .iter()
-                .map(|f| ark_to_nova_field::<AF, <NG as Group>::Scalar>(f))
-                .collect::<Vec<<NG as Group>::Scalar>>()
+                .map(|f| ark_to_nova_field::<AF, NS>(f))
+                .collect::<Vec<NS>>()
         );
 
         // produce the prover and verifier keys for compressed snark
@@ -441,7 +476,13 @@ mod tests {
         return zn_primary;
     }
 
-    fn make_circuit_2(z_in: &Vec<AF>, i: usize) -> FCircuit<<NG as Group>::Scalar> {
+    fn make_circuit_2<'a>(
+        z_in: &Vec<AF>,
+        i: usize,
+        saved_nova_matrices: Option<
+            &'a Vec<(Vec<(NS, usize)>, Vec<(NS, usize)>, Vec<(NS, usize)>)>,
+        >,
+    ) -> FCircuit<'a, NS> {
         let cs = ConstraintSystem::<AF>::new_ref();
 
         let i_wit = FpVar::new_witness(cs.clone(), || Ok(AF::from(i as u32))).unwrap();
@@ -470,22 +511,22 @@ mod tests {
         // (b_in + a_in) + i = b_out
         b_out.enforce_equal(&((b_in + a_in) + &i_wit)).unwrap();
 
-        FCircuit::new(cs)
+        FCircuit::new(cs, saved_nova_matrices)
     }
 
     pub fn run_prover(zi_list: Vec<Vec<AF>>, num_steps: usize) {
-        // -> Vec<<NG as Group>::Scalar> {
+        // -> Vec<NS> {
         //Round Zero to set up primary params
 
-        let mut circuit_primary = make_circuit_2(&zi_list[0], 0);
+        let mut circuit_primary = make_circuit_2(&zi_list[0], 0, None);
 
         let z0_primary = circuit_primary.get_zi().clone();
         assert_eq!(
             z0_primary,
             zi_list[0]
                 .iter()
-                .map(|f| ark_to_nova_field::<AF, <NG as Group>::Scalar>(f))
-                .collect::<Vec<<NG as Group>::Scalar>>()
+                .map(|f| ark_to_nova_field::<AF, NS>(f))
+                .collect::<Vec<NS>>()
         );
 
         let circuit_secondary = TrivialCircuit::default();
@@ -526,7 +567,7 @@ mod tests {
         //Actually prove things now
         for i in 0..num_steps {
             println!("round {:?}", i);
-            circuit_primary = make_circuit_2(&zi_list[i], i);
+            circuit_primary = make_circuit_2(&zi_list[i], i, None);
 
             let res =
                 recursive_snark.prove_step(&pp, &circuit_primary, &circuit_secondary, None, vec![]);
@@ -545,8 +586,8 @@ mod tests {
         //     zn_primary,
         //     zi_list[num_steps]
         //         .iter()
-        //         .map(|f| ark_to_nova_field::<AF, <NG as Group>::Scalar>(f))
-        //         .collect::<Vec<<NG as Group>::Scalar>>()
+        //         .map(|f| ark_to_nova_field::<AF, NS>(f))
+        //         .collect::<Vec<NS>>()
         // );
 
         // // produce the prover and verifier keys for compressed snark
