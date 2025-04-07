@@ -394,7 +394,6 @@ mod tests {
         let mut circuit_primary = make_ark_circuit(&zi_list[0], None);
         // JUST ONE CLONE!
         let saved_nova_matrices = circuit_primary.lcs.clone().left().unwrap();
-        let nm_ref = &saved_nova_matrices;
 
         let z0_primary = circuit_primary.get_zi().clone();
         assert_eq!(
@@ -443,7 +442,7 @@ mod tests {
                 recursive_snark.prove_step(&pp, &circuit_primary, &circuit_secondary, None, vec![]);
             assert!(res.is_ok());
             res.unwrap();
-            circuit_primary = make_ark_circuit(&zi_list[i + 1], Some(nm_ref));
+            circuit_primary = make_ark_circuit(&zi_list[i + 1], Some(&saved_nova_matrices));
         }
 
         // verify the recursive SNARK
