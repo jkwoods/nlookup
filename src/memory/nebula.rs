@@ -1063,7 +1063,7 @@ mod tests {
     type S1 = nova_snark::spartan::snark::RelaxedR1CSSNARK<E1, EE1>;
     type S2 = nova_snark::spartan::snark::RelaxedR1CSSNARK<E2, EE2>;
 
-    fn make_full_mem_circ<'a>(
+    fn make_full_mem_circ(
         i: usize,
         rm: &mut RunningMem<A>,
         do_rw_ops: fn(
@@ -1077,7 +1077,7 @@ mod tests {
         running_ws: &mut A,
         running_fs: &mut A,
         stack_ptrs: &mut Vec<A>,
-    ) -> FCircuit<'a, N1> {
+    ) -> FCircuit<N1> {
         let cs = ConstraintSystem::<A>::new_ref();
         cs.set_optimization_goal(OptimizationGoal::Constraints);
 
@@ -1247,7 +1247,7 @@ mod tests {
             mem_builder.new_running_mem(batch_size, false);
 
         // nova
-        let circuit_secondary = TrivialCircuit::default();
+        let mut circuit_secondary = TrivialCircuit::default();
         let mut running_is = A::one();
         let mut running_rs = A::one();
         let mut running_ws = A::one();
@@ -1276,8 +1276,8 @@ mod tests {
             FCircuit<<E1 as Engine>::Scalar>,
             TrivialCircuit<<E2 as Engine>::Scalar>,
         >::setup(
-            &circuit_primary,
-            &circuit_secondary,
+            &mut circuit_primary,
+            &mut circuit_secondary,
             &*default_ck_hint(),
             &*default_ck_hint(),
             //rm.scan_per_batch * (3 + rm.elem_len),
@@ -1297,8 +1297,8 @@ mod tests {
             TrivialCircuit<<E2 as Engine>::Scalar>,
         >::new(
             &pp,
-            &circuit_primary,
-            &circuit_secondary,
+            &mut circuit_primary,
+            &mut circuit_secondary,
             &z0_primary,
             &[<E2 as Engine>::Scalar::ZERO],
             Some(blinds[0].clone()),
@@ -1310,8 +1310,8 @@ mod tests {
             println!("==============================================");
             let res = recursive_snark.prove_step(
                 &pp,
-                &circuit_primary,
-                &circuit_secondary,
+                &mut circuit_primary,
+                &mut circuit_secondary,
                 Some(blinds[i].clone()),
                 ram_hints[i].clone(),
             );

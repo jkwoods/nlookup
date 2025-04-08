@@ -14,6 +14,7 @@ use itertools::Either;
 use nova_snark::traits::circuit::StepCircuit;
 use rayon::iter::ParallelBridge;
 use rayon::prelude::*;
+use std::sync::Arc;
 
 pub trait AllocIoVar<V: ?Sized, A: arkField>: Sized + AllocVar<V, A> {
     /// Allocates a new input/output pair of type `Self` in the `ConstraintSystem`
@@ -92,23 +93,37 @@ fn bellpepper_lc<N: novaPrimeField, CS: ConstraintSystem<N>>(
 }
 
 #[derive(Clone, Debug)]
-pub struct FCircuit<'a, N: novaPrimeField<Repr = [u8; 32]>> {
-    lcs: Either<
+pub struct FCircuit<N: novaPrimeField<Repr = [u8; 32]>> {
+    pub lcs: Either<
         Vec<(Vec<(N, usize)>, Vec<(N, usize)>, Vec<(N, usize)>)>,
-        &'a Vec<(Vec<(N, usize)>, Vec<(N, usize)>, Vec<(N, usize)>)>,
+        Arc<
+            Vec<(
+                LinearCombination<N>,
+                LinearCombination<N>,
+                LinearCombination<N>,
+            )>,
+        >,
     >,
     wit_assignments: Vec<N>,
     input_assignments: Vec<N>,
     output_assignments: Vec<N>,
 }
 
-impl<'a, N: novaPrimeField<Repr = [u8; 32]>> FCircuit<'a, N> {
+impl<N: novaPrimeField<Repr = [u8; 32]>> FCircuit<N> {
     // make circuits and witnesses for round i
     // the ark_cs should only have witness and input/output PAIRs
     // (i.e. a user should have never called new_input())
     pub fn new<A: arkPrimeField<BigInt = BigInteger256>>(
         ark_cs_ref: ConstraintSystemRef<A>,
-        saved_nova_matrices: Option<&'a Vec<(Vec<(N, usize)>, Vec<(N, usize)>, Vec<(N, usize)>)>>,
+        nova_matrices: Option<
+            Arc<
+                Vec<(
+                    LinearCombination<N>,
+                    LinearCombination<N>,
+                    LinearCombination<N>,
+                )>,
+            >,
+        >,
     ) -> Self {
         ark_cs_ref.finalize();
         assert!(ark_cs_ref.is_satisfied().unwrap());
@@ -131,30 +146,16 @@ impl<'a, N: novaPrimeField<Repr = [u8; 32]>> FCircuit<'a, N> {
             .map(|io| ark_to_nova_field(io))
             .collect();
 
-        /*
-                let mut input_assignments = Vec::new();
-                let mut output_assignments = Vec::new();
-                for (i, io) in ark_cs.instance_assignment.par_iter().skip(1).enumerate() {
-                    if i % 2 == 0 {
-                        // input
-                        input_assignments.push(ark_to_nova_field(io));
-                    } else {
-                        // output
-                        output_assignments.push(ark_to_nova_field(io));
-                    }
-                }
-        */
         let wit_assignments: Vec<N> = ark_cs
             .witness_assignment
             .par_iter()
             .map(|f| ark_to_nova_field(f))
             .collect();
 
-        let ark_matrices = ark_cs.to_matrices().unwrap();
-
-        let lcs = if saved_nova_matrices.is_some() {
-            Either::Right(saved_nova_matrices.unwrap())
+        let lcs = if nova_matrices.is_some() {
+            Either::Right(nova_matrices.unwrap())
         } else {
+            let ark_matrices = ark_cs.to_matrices().unwrap();
             let lcs = (0..ark_matrices.a.len())
                 .into_par_iter()
                 .map(|i| {
@@ -195,13 +196,13 @@ impl<'a, N: novaPrimeField<Repr = [u8; 32]>> FCircuit<'a, N> {
     }
 }
 
-impl<'a, N: novaPrimeField<Repr = [u8; 32]>> StepCircuit<N> for FCircuit<'a, N> {
+impl<N: novaPrimeField<Repr = [u8; 32]>> StepCircuit<N> for FCircuit<N> {
     fn arity(&self) -> usize {
         self.output_assignments.len()
     }
 
     fn synthesize<CS: ConstraintSystem<N>>(
-        &self,
+        &mut self,
         cs: &mut CS,
         z: &[AllocatedNum<N>],
     ) -> Result<Vec<AllocatedNum<N>>, bpSynthesisError> {
@@ -222,18 +223,7 @@ impl<'a, N: novaPrimeField<Repr = [u8; 32]>> StepCircuit<N> for FCircuit<'a, N> 
             .zip(alloc_out.par_iter())
             .flat_map(|(zi, oi)| [zi.clone(), oi.clone()])
             .collect::<Vec<AllocatedNum<N>>>();
-        /*
-                let mut alloc_io = Vec::new();
-                for i in 0..(self.input_assignments.len() + self.output_assignments.len()) {
-                    if i % 2 == 0 {
-                        // input
-                        alloc_io.push(z[i / 2].clone());
-                    } else {
-                        // output
-                        alloc_io.push(alloc_out[(i - 1) / 2].clone()); // TODO?
-                    }
-                }
-        */
+
         // allocate all wits
         let alloc_wits = self
             .wit_assignments
@@ -244,18 +234,37 @@ impl<'a, N: novaPrimeField<Repr = [u8; 32]>> StepCircuit<N> for FCircuit<'a, N> 
 
         // add constraints
 
-        let lcs = match &self.lcs {
-            Either::Left(lcs) => lcs,
-            Either::Right(lcs) => lcs,
-        };
-        // do not parallelize - cs not shared b/w threads
-        lcs.iter().enumerate().for_each(|(i, (a, b, c))| {
-            let a_lc = bellpepper_lc::<N, CS>(&alloc_io, &alloc_wits, a, i);
-            let b_lc = bellpepper_lc::<N, CS>(&alloc_io, &alloc_wits, b, i);
-            let c_lc = bellpepper_lc::<N, CS>(&alloc_io, &alloc_wits, c, i);
+        self.lcs = match &self.lcs {
+            Either::Left(lcs) => {
+                let mut saved_lcs = Vec::new();
 
-            cs.enforce(|| format!("con{}", i), |_| a_lc, |_| b_lc, |_| c_lc);
-        });
+                lcs.iter().enumerate().for_each(|(i, (a, b, c))| {
+                    let a_lc = bellpepper_lc::<N, CS>(&alloc_io, &alloc_wits, a, i);
+                    let b_lc = bellpepper_lc::<N, CS>(&alloc_io, &alloc_wits, b, i);
+                    let c_lc = bellpepper_lc::<N, CS>(&alloc_io, &alloc_wits, c, i);
+
+                    saved_lcs.push((a_lc.clone(), b_lc.clone(), c_lc.clone()));
+
+                    cs.enforce(|| format!("con{}", i), |_| a_lc, |_| b_lc, |_| c_lc);
+                });
+
+                Either::Right(Arc::new(saved_lcs))
+            }
+            Either::Right(saved_lcs) => {
+                saved_lcs
+                    .iter()
+                    .enumerate()
+                    .for_each(|(i, (a_lc, b_lc, c_lc))| {
+                        cs.enforce(
+                            || format!("con{}", i),
+                            |_| a_lc.clone(),
+                            |_| b_lc.clone(),
+                            |_| c_lc.clone(),
+                        );
+                    });
+                Either::Right(saved_lcs.clone())
+            }
+        };
 
         Ok(alloc_out)
     }
@@ -352,12 +361,18 @@ mod tests {
         run_nova(make_circuit_1, zi_list, 3);
     }
 
-    fn make_circuit_1<'a>(
+    fn make_circuit_1(
         z_in: &Vec<AF>,
         saved_nova_matrices: Option<
-            &'a Vec<(Vec<(NS, usize)>, Vec<(NS, usize)>, Vec<(NS, usize)>)>,
+            Arc<
+                Vec<(
+                    LinearCombination<NS>,
+                    LinearCombination<NS>,
+                    LinearCombination<NS>,
+                )>,
+            >,
         >,
-    ) -> FCircuit<'a, NS> {
+    ) -> FCircuit<NS> {
         let cs = ConstraintSystem::<AF>::new_ref();
 
         let two = AF::one() + AF::one();
@@ -383,17 +398,23 @@ mod tests {
     }
 
     fn run_nova(
-        make_ark_circuit: for<'a> fn(
+        make_ark_circuit: fn(
             &Vec<AF>,
-            Option<&'a Vec<(Vec<(NS, usize)>, Vec<(NS, usize)>, Vec<(NS, usize)>)>>,
-        ) -> FCircuit<'a, NS>,
+            Option<
+                Arc<
+                    Vec<(
+                        LinearCombination<NS>,
+                        LinearCombination<NS>,
+                        LinearCombination<NS>,
+                    )>,
+                >,
+            >,
+        ) -> FCircuit<NS>,
         zi_list: Vec<Vec<AF>>,
         num_steps: usize,
     ) -> Vec<NS> {
-        let circuit_secondary = TrivialCircuit::default();
+        let mut circuit_secondary = TrivialCircuit::default();
         let mut circuit_primary = make_ark_circuit(&zi_list[0], None);
-        // JUST ONE CLONE!
-        let saved_nova_matrices = circuit_primary.lcs.clone().left().unwrap();
 
         let z0_primary = circuit_primary.get_zi().clone();
         assert_eq!(
@@ -411,8 +432,8 @@ mod tests {
             FCircuit<<E1 as Engine>::Scalar>,
             TrivialCircuit<<E2 as Engine>::Scalar>,
         >::setup(
-            &circuit_primary,
-            &circuit_secondary,
+            &mut circuit_primary,
+            &mut circuit_secondary,
             &*default_ck_hint(),
             &*default_ck_hint(),
             vec![],
@@ -428,8 +449,8 @@ mod tests {
             TrivialCircuit<<E2 as Engine>::Scalar>,
         >::new(
             &pp,
-            &circuit_primary,
-            &circuit_secondary,
+            &mut circuit_primary,
+            &mut circuit_secondary,
             &z0_primary,
             &[<E2 as Engine>::Scalar::ZERO],
             None,
@@ -437,12 +458,20 @@ mod tests {
         )
         .unwrap();
 
+        let saved_nova_matrices = circuit_primary.lcs.as_ref().right().unwrap().clone();
+
         for i in 0..num_steps {
-            let res =
-                recursive_snark.prove_step(&pp, &circuit_primary, &circuit_secondary, None, vec![]);
+            let res = recursive_snark.prove_step(
+                &pp,
+                &mut circuit_primary,
+                &mut circuit_secondary,
+                None,
+                vec![],
+            );
             assert!(res.is_ok());
             res.unwrap();
-            circuit_primary = make_ark_circuit(&zi_list[i + 1], Some(&saved_nova_matrices));
+
+            circuit_primary = make_ark_circuit(&zi_list[i + 1], Some(saved_nova_matrices.clone()));
         }
 
         // verify the recursive SNARK
@@ -475,13 +504,19 @@ mod tests {
         return zn_primary;
     }
 
-    fn make_circuit_2<'a>(
+    fn make_circuit_2(
         z_in: &Vec<AF>,
         i: usize,
         saved_nova_matrices: Option<
-            &'a Vec<(Vec<(NS, usize)>, Vec<(NS, usize)>, Vec<(NS, usize)>)>,
+            Arc<
+                Vec<(
+                    LinearCombination<NS>,
+                    LinearCombination<NS>,
+                    LinearCombination<NS>,
+                )>,
+            >,
         >,
-    ) -> FCircuit<'a, NS> {
+    ) -> FCircuit<NS> {
         let cs = ConstraintSystem::<AF>::new_ref();
 
         let i_wit = FpVar::new_witness(cs.clone(), || Ok(AF::from(i as u32))).unwrap();
@@ -528,7 +563,7 @@ mod tests {
                 .collect::<Vec<NS>>()
         );
 
-        let circuit_secondary = TrivialCircuit::default();
+        let mut circuit_secondary = TrivialCircuit::default();
 
         // produce public parameters
         let pp = PublicParams::<
@@ -537,8 +572,8 @@ mod tests {
             FCircuit<<E1 as Engine>::Scalar>,
             TrivialCircuit<<E2 as Engine>::Scalar>,
         >::setup(
-            &circuit_primary,
-            &circuit_secondary,
+            &mut circuit_primary,
+            &mut circuit_secondary,
             &*default_ck_hint(),
             &*default_ck_hint(),
             vec![],
@@ -554,8 +589,8 @@ mod tests {
             TrivialCircuit<<E2 as Engine>::Scalar>,
         >::new(
             &pp,
-            &circuit_primary,
-            &circuit_secondary,
+            &mut circuit_primary,
+            &mut circuit_secondary,
             &z0_primary,
             &[<E2 as Engine>::Scalar::zero()],
             None,
@@ -568,8 +603,13 @@ mod tests {
             println!("round {:?}", i);
             circuit_primary = make_circuit_2(&zi_list[i], i, None);
 
-            let res =
-                recursive_snark.prove_step(&pp, &circuit_primary, &circuit_secondary, None, vec![]);
+            let res = recursive_snark.prove_step(
+                &pp,
+                &mut circuit_primary,
+                &mut circuit_secondary,
+                None,
+                vec![],
+            );
             assert!(res.is_ok(), " res {:?}", res);
 
             let v_res =
