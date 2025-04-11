@@ -149,7 +149,7 @@ pub struct MemBuilder<F: arkPrimeField> {
     fs: HashMap<usize, MemElem<F>>,
     stack_spaces: Vec<usize>,
     stack_ptrs: Vec<usize>,
-    elem_len: usize,
+    pub elem_len: usize,
     ts: usize,
 }
 
