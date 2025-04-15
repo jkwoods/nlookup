@@ -545,7 +545,7 @@ pub struct RunningMem<F: arkPrimeField> {
     i: usize, // for is
     f: usize, // for fs
     perm_chal: F,
-    elem_len: usize,
+    pub elem_len: usize,
     pub is_priv_per_batch: usize,
     pub fs_priv_per_batch: usize,
     // if only ram, empty
