@@ -631,6 +631,11 @@ impl<F: arkPrimeField> RunningMem<F> {
         ))
     }
 
+    // should only be used for testing
+    pub fn get_mem_wits(&self) -> &HashMap<F, MemElem<F>> {
+        &self.mem_wits    
+    }
+
     pub fn begin_new_circuit(
         &mut self,
         cs: ConstraintSystemRef<F>,
