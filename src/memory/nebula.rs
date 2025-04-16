@@ -505,7 +505,7 @@ impl<F: arkPrimeField> MemBuilder<F> {
             priv_fs,
             &padding,
         );
-        println!("RAM HINTS {:#?}", ram_hints);
+        // println!("RAM HINTS {:#?}", ram_hints);
 
         let perm_chal = nova_to_ark_field::<N1, F>(&sample_challenge(&ic_cmt));
 
@@ -1105,7 +1105,7 @@ mod tests {
         assert!(res.is_ok());
         let (mut next_mem_ops, f) = res.unwrap();
 
-        for mo in &rw_mem_ops {
+        /*for mo in &rw_mem_ops {
             mo.print_vals();
         }
         println!("INIT");
@@ -1115,7 +1115,7 @@ mod tests {
         println!("FINAL");
         for mo in &f {
             mo.print_vals();
-        }
+        }*/
 
         next_mem_ops.extend(rw_mem_ops);
         next_mem_ops.extend(f);
