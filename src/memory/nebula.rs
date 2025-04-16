@@ -534,7 +534,7 @@ impl<F: arkPrimeField> MemBuilder<F> {
     }
 
     // should only be used for testing
-    pub fn get_mem_wits(&self) -> &HashMap<F, MemElem<F>> {
+    pub fn get_mem_wits(&self) -> &HashMap<usize, MemElem<F>> {
         &self.mem   
     }
 }
