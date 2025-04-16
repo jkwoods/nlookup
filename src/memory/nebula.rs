@@ -535,7 +535,7 @@ impl<F: arkPrimeField> MemBuilder<F> {
 
     // should only be used for testing
     pub fn get_mem_wits(&self) -> &HashMap<F, MemElem<F>> {
-        &self.mem_wits    
+        &self.mem   
     }
 }
 
