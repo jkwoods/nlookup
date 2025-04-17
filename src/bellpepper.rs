@@ -128,7 +128,9 @@ impl<N: novaPrimeField<Repr = [u8; 32]>> FCircuit<N> {
         >,
     ) -> Self {
         ark_cs_ref.finalize();
-        assert!(ark_cs_ref.is_satisfied().unwrap());
+        if nova_matrices.is_none() {
+            assert!(ark_cs_ref.is_satisfied().unwrap());
+        }
 
         let ark_cs = ark_cs_ref.borrow().unwrap();
 
