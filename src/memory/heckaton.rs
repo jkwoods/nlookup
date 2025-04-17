@@ -8,11 +8,11 @@ use ark_r1cs_std::{
     boolean::Boolean,
     eq::EqGadget,
     fields::{fp::FpVar, FieldVar},
-    R1CSVar,
+    GR1CSVar,
 };
 use ark_relations::{
     lc, ns,
-    r1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisError, Variable},
+    gr1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisError, Variable},
 };
 use ark_std::test_rng;
 use std::collections::HashMap;
@@ -774,7 +774,7 @@ mod tests {
     use crate::memory::heckaton::*;
     use ark_ff::AdditiveGroup;
     use ark_pallas::Fr as F;
-    use ark_relations::r1cs::{ConstraintLayer, ConstraintSystem, OptimizationGoal, TracingMode};
+    use ark_relations::gr1cs::{ConstraintLayer, ConstraintSystem, OptimizationGoal, TracingMode};
     use rand::Rng;
     use tracing_subscriber::layer::SubscriberExt;
 

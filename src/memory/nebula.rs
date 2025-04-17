@@ -6,11 +6,11 @@ use ark_r1cs_std::{
     boolean::Boolean,
     eq::EqGadget,
     fields::{fp::FpVar, FieldVar},
-    R1CSVar,
+    GR1CSVar,
 };
 use ark_relations::{
+    gr1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisError, Variable},
     lc, ns,
-    r1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisError, Variable},
 };
 use ark_std::test_rng;
 use nova_snark::{
@@ -1053,9 +1053,9 @@ mod tests {
     use crate::utils::*;
     use ark_ff::{One, Zero};
     use ark_r1cs_std::{
-        alloc::AllocVar, boolean::Boolean, eq::EqGadget, fields::fp::FpVar, R1CSVar,
+        alloc::AllocVar, boolean::Boolean, eq::EqGadget, fields::fp::FpVar, GR1CSVar,
     };
-    use ark_relations::r1cs::{
+    use ark_relations::gr1cs::{
         ConstraintSystem, ConstraintSystemRef, OptimizationGoal, SynthesisError,
     };
     use ff::Field as novaField;

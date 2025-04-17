@@ -2,9 +2,9 @@ use ark_crypto_primitives::sponge::poseidon::{find_poseidon_ark_and_mds, Poseido
 use ark_ff::{BigInteger, PrimeField};
 use ark_r1cs_std::{
     alloc::AllocVar, boolean::Boolean, eq::EqGadget, fields::fp::FpVar, fields::FieldVar,
-    prelude::AllocationMode, R1CSVar,
+    prelude::AllocationMode, GR1CSVar,
 };
-use ark_relations::r1cs::SynthesisError;
+use ark_relations::gr1cs::SynthesisError;
 use nova_snark::traits::Engine;
 
 // we have to hardcode these, unfortunately

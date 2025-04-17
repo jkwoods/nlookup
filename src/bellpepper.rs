@@ -4,7 +4,9 @@ use ark_r1cs_std::{
     boolean::Boolean,
     fields::{fp::FpVar, FieldVar},
 };
-use ark_relations::r1cs::{ConstraintSystemRef, Namespace, SynthesisError as arkSynthesisError};
+use ark_relations::gr1cs::{
+    ConstraintSystemRef, Namespace, SynthesisError as arkSynthesisError, R1CS_PREDICATE_LABEL,
+};
 use bellpepper_core::{
     num::AllocatedNum, ConstraintSystem, LinearCombination, SynthesisError as bpSynthesisError,
 };
@@ -131,23 +133,25 @@ impl<N: novaPrimeField<Repr = [u8; 32]>> FCircuit<N> {
         let ark_cs = ark_cs_ref.borrow().unwrap();
 
         // io pairs + constant
-        assert_eq!(ark_cs.instance_assignment[0], A::one());
-        assert_eq!(ark_cs.instance_assignment.len() % 2, 1);
+        let instance_assignment = ark_cs.instance_assignment().unwrap();
+        assert_eq!(instance_assignment[0], A::one());
+        assert_eq!(instance_assignment.len() % 2, 1);
 
-        let input_assignments = ark_cs.instance_assignment[1..]
+        let input_assignments = instance_assignment[1..]
             .par_iter()
             .step_by(2)
             .map(|io| ark_to_nova_field(io))
             .collect();
 
-        let output_assignments = ark_cs.instance_assignment[2..]
+        let output_assignments = instance_assignment[2..]
             .par_iter()
             .step_by(2)
             .map(|io| ark_to_nova_field(io))
             .collect();
 
         let wit_assignments: Vec<N> = ark_cs
-            .witness_assignment
+            .witness_assignment()
+            .unwrap()
             .par_iter()
             .map(|f| ark_to_nova_field(f))
             .collect();
@@ -155,20 +159,20 @@ impl<N: novaPrimeField<Repr = [u8; 32]>> FCircuit<N> {
         let lcs = if nova_matrices.is_some() {
             Either::Right(nova_matrices.unwrap())
         } else {
-            let ark_matrices = ark_cs.to_matrices().unwrap();
-            let lcs = (0..ark_matrices.a.len())
+            let ark_matrices = &ark_cs.to_matrices().unwrap()[R1CS_PREDICATE_LABEL];
+            let lcs = (0..ark_matrices[0].len())
                 .into_par_iter()
                 .map(|i| {
                     (
-                        ark_matrices.a[i]
+                        ark_matrices[0][i]
                             .par_iter()
                             .map(|(val, index)| (ark_to_nova_field(val), *index))
                             .collect(),
-                        ark_matrices.b[i]
+                        ark_matrices[1][i]
                             .par_iter()
                             .map(|(val, index)| (ark_to_nova_field(val), *index))
                             .collect(),
-                        ark_matrices.c[i]
+                        ark_matrices[2][i]
                             .par_iter()
                             .map(|(val, index)| (ark_to_nova_field(val), *index))
                             .collect(),
@@ -278,8 +282,8 @@ mod tests {
     use ark_r1cs_std::eq::EqGadget;
     use ark_r1cs_std::R1CSVar;
     use ark_relations::{
+        gr1cs::{ConstraintSystem, OptimizationGoal, Variable},
         lc,
-        r1cs::{ConstraintSystem, OptimizationGoal, Variable},
     };
     use ff::PrimeField as novaPrimeField;
     use nova_snark::{
@@ -299,8 +303,8 @@ mod tests {
     type E2 = nova_snark::provider::VestaEngine;
     type EE1 = nova_snark::provider::ipa_pc::EvaluationEngine<E1>;
     type EE2 = nova_snark::provider::ipa_pc::EvaluationEngine<E2>;
-    type S1 = nova_snark::spartan::snark::RelaxedR1CSSNARK<E1, EE1>;
-    type S2 = nova_snark::spartan::snark::RelaxedR1CSSNARK<E2, EE2>;
+    type S1 = nova_snark::spartan::snark::RelaxedGR1CSSNARK<E1, EE1>;
+    type S2 = nova_snark::spartan::snark::RelaxedGR1CSSNARK<E2, EE2>;
 
     #[test]
     fn ff_convert() {

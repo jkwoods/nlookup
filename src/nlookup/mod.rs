@@ -10,11 +10,11 @@ use ark_r1cs_std::{
     convert::ToConstraintFieldGadget,
     eq::EqGadget,
     fields::{fp::FpVar, FieldVar},
-    R1CSVar,
+    GR1CSVar,
 };
 use ark_relations::{
     lc, ns,
-    r1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisError, Variable},
+    gr1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisError, Variable},
 };
 use ark_std::test_rng;
 use itertools::Itertools;
@@ -588,7 +588,7 @@ mod tests {
     use crate::nlookup::*;
     use ark_ff::{Field, PrimeField};
     use ark_pallas::Fr as A;
-    use ark_relations::r1cs::{ConstraintSystem, OptimizationGoal};
+    use ark_relations::gr1cs::{ConstraintSystem, OptimizationGoal};
     use ff::Field as novaField;
     use nova_snark::provider::hyrax_pc::HyraxPC;
     use nova_snark::traits::{commitment::CommitmentEngineTrait, Engine};

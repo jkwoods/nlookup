@@ -9,11 +9,11 @@ use ark_r1cs_std::{
     boolean::Boolean,
     eq::EqGadget,
     fields::{fp::FpVar, FieldVar},
-    R1CSVar,
+    GR1CSVar,
 };
 use ark_relations::{
     lc, ns,
-    r1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisError, Variable},
+    gr1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisError, Variable},
 };
 
 #[derive(Clone, Debug)]
@@ -115,7 +115,7 @@ mod tests {
     use ark_ff::PrimeField;
     use ark_pallas::Fr as F;
     use ark_r1cs_std::{alloc::AllocVar, eq::EqGadget, fields::fp::FpVar, R1CSVar};
-    use ark_relations::r1cs::{ConstraintSystem, OptimizationGoal, SynthesisError};
+    use ark_relations::gr1cs::{ConstraintSystem, OptimizationGoal, SynthesisError};
     use ark_std::test_rng;
 
     // pattern: true == push, false == pop
