@@ -280,7 +280,7 @@ mod tests {
     use crate::bellpepper::*;
     use ark_ff::{BigInt, One, Zero};
     use ark_r1cs_std::eq::EqGadget;
-    use ark_r1cs_std::R1CSVar;
+    use ark_r1cs_std::GR1CSVar;
     use ark_relations::{
         gr1cs::{ConstraintSystem, OptimizationGoal, Variable},
         lc,
@@ -303,8 +303,8 @@ mod tests {
     type E2 = nova_snark::provider::VestaEngine;
     type EE1 = nova_snark::provider::ipa_pc::EvaluationEngine<E1>;
     type EE2 = nova_snark::provider::ipa_pc::EvaluationEngine<E2>;
-    type S1 = nova_snark::spartan::snark::RelaxedGR1CSSNARK<E1, EE1>;
-    type S2 = nova_snark::spartan::snark::RelaxedGR1CSSNARK<E2, EE2>;
+    type S1 = nova_snark::spartan::snark::RelaxedR1CSSNARK<E1, EE1>;
+    type S2 = nova_snark::spartan::snark::RelaxedR1CSSNARK<E2, EE2>;
 
     #[test]
     fn ff_convert() {
