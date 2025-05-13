@@ -10,20 +10,23 @@ ark-poly = { version = "0.5.0", default-features = false }
 ark-serialize = { version = "0.5.0", default-features = false }
 ark-relations = { git="https://github.com/arkworks-rs/snark/", default-features = false }
 ark-r1cs-std = { git="https://github.com/arkworks-rs/r1cs-std", default-features = false }
-ark-pallas = { version = "0.5.0" }
+ark-grumpkin = { version = "0.5.0" }
+ark-bn254 = { version = "0.5.0" }
 ark-std = { version = "0.5.0", default-features = false }
 ark-crypto-primitives = { git="https://github.com/alireza-shirzad/crypto-primitives", features = ["sponge","r1cs"] }
 itertools = "0.13.0"
 rayon = "1.3.0"
 rand = "0.8"
+halo2curves = { version = "0.8.0", features = ["bits", "derive_serde"] }
+
 
 # I am playing a dangerous game - do not copy thoughtlessly
 bellpepper-core = { version="0.4.0", default-features = false }
 bellpepper = { version="0.4.0", default-features = false }
 ff = { version = "0.13.0", features = ["derive"] }
 pasta_curves = { version = "0.5", features = ["repr-c", "serde"] }
-#nova-snark = { path = "../Nova", default-features = false }
-nova-snark = { git = "https://github.com/jkwoods/Nova.git", branch = "cmts", default-features = false }
+nova-snark = { path = "../Nova", default-features = false }
+#nova-snark = { git = "https://github.com/jkwoods/Nova.git", branch = "cmts", default-features = false }
 tracing-subscriber = { version = "0.2" }
 tracing = { version = "0.1", default-features = false, features = [ "attributes" ] }
 

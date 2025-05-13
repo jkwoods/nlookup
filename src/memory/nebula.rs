@@ -14,12 +14,17 @@ use ark_relations::{
 };
 use ark_std::test_rng;
 use nova_snark::{
+    gadgets::utils::scalar_as_base,
     provider::incremental::Incremental,
-    traits::{Engine, ROConstants, ROTrait},
+    traits::{
+        commitment::{CommitmentEngineTrait, Len},
+        Engine, ROConstants, ROTrait,
+    },
 };
 use std::collections::HashMap;
 
-trait arkPrimeField = PrimeField<BigInt = BigInteger256>;
+pub trait arkPrimeField = PrimeField<BigInt = BigInteger256>;
+type CommitmentKey<E> = <<E as Engine>::CE as CommitmentEngineTrait<E>>::CommitmentKey;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct MemElem<F: arkPrimeField> {
@@ -199,7 +204,6 @@ impl<F: arkPrimeField> MemBuilder<F> {
         self.inner_write(self.stack_ptrs[stack_tag], vals, 2);
 
         self.stack_ptrs[stack_tag] += 1;
-
         assert!(self.stack_ptrs[stack_tag] <= self.stack_spaces[stack_tag + 1]);
     }
 
@@ -305,7 +309,7 @@ impl<F: arkPrimeField> MemBuilder<F> {
 
     fn ic_to_ram(
         &self,
-        ic_gen: &Vec<Incremental<E1, E2>>,
+        ic_gen: &Incremental<E1, E2>,
         rw_batch_size: usize,
         is_priv_batch_size: usize,
         fs_priv_batch_size: usize,
@@ -315,9 +319,9 @@ impl<F: arkPrimeField> MemBuilder<F> {
         priv_fs: &[MemElem<F>],
         padding: &MemElem<F>,
     ) -> (Vec<N2>, Vec<Vec<N1>>, Vec<Vec<N1>>) {
-        assert!((sep_final && ic_gen.len() == 3) || (!sep_final && ic_gen.len() == 2));
+        let num_cmts = if sep_final { 3 } else { 2 };
 
-        let mut ci: Vec<Option<N2>> = vec![None; ic_gen.len()];
+        let mut ci: Vec<Option<N2>> = vec![None; num_cmts];
         let mut blinds: Vec<Vec<N1>> = vec![Vec::new(); num_iters];
         let mut ram_hints = Vec::new();
 
@@ -393,7 +397,7 @@ impl<F: arkPrimeField> MemBuilder<F> {
                 rs_ws_hint.extend(nova_wm);
             }
 
-            let mut ordered_hints = is_hint;
+            let mut ordered_hints: Vec<_> = is_hint;
             ordered_hints.extend(rs_ws_hint);
             ordered_hints.extend(fs_hint);
 
@@ -410,9 +414,23 @@ impl<F: arkPrimeField> MemBuilder<F> {
             } else {
                 vec![0..isb, isb..(isb + fsb + rwb * 2)]
             };
+            //println!("HINT RANGES {:#?}", hint_ranges);
 
-            for (j, range) in hint_ranges.into_iter().enumerate() {
-                let (hash, blind) = ic_gen[j].commit(ci[j], &ordered_hints[range]);
+            let mut cmt_wits = vec![Vec::new(); num_cmts];
+
+            for k in 0..num_cmts {
+                for (j, range) in hint_ranges.iter().enumerate() {
+                    if j == k {
+                        cmt_wits[k].extend(&ordered_hints[range.clone()]);
+                    } else {
+                        cmt_wits[k].extend(vec![N1::zero(); range.len()]);
+                    }
+                }
+            }
+
+            for j in 0..num_cmts {
+                //println!("cmt wits {:#?}", cmt_wits[j]);
+                let (hash, blind) = ic_gen.commit(ci[j], &cmt_wits[j]);
                 ci[j] = Some(hash);
 
                 blinds[i].push(blind);
@@ -432,7 +450,7 @@ impl<F: arkPrimeField> MemBuilder<F> {
         sep_final: bool, // true -> cmts/ivcify =  [is], [rs, ws], [fs]
                          // false -> cmts/ivcify = [is], [rs, ws, fs]
     ) -> (
-        Vec<Incremental<E1, E2>>,
+        Incremental<E1, E2>,
         Vec<N2>,
         Vec<Vec<N1>>,
         Vec<Vec<N1>>,
@@ -478,22 +496,11 @@ impl<F: arkPrimeField> MemBuilder<F> {
         let fs_priv_per_batch = ((priv_fs.len() as f32) / (num_iters as f32)).ceil() as usize;
 
         // cmt
-        let mut big_gens = Incremental::<E1, E2>::setup(
-            b"ramcmt",
-            (is_priv_per_batch + fs_priv_per_batch) * (3 + self.elem_len)
-                + rw_batch_size * 2 * (3 + self.elem_len),
-        );
-        let (is_gens, big_gens) = big_gens.split_at(is_priv_per_batch * (3 + self.elem_len));
+        let key_len = (is_priv_per_batch + fs_priv_per_batch) * (3 + self.elem_len)
+            + rw_batch_size * 2 * (3 + self.elem_len);
 
-        let mut ic_gens = vec![is_gens];
-
-        if sep_final {
-            let (rw_gens, big_gens) = big_gens.split_at(rw_batch_size * 2 * (3 + self.elem_len));
-            ic_gens.push(rw_gens);
-            ic_gens.push(big_gens);
-        } else {
-            ic_gens.push(big_gens);
-        }
+        println!("key len {:#?}", key_len);
+        let mut ic_gens = Incremental::<E1, E2>::setup(key_len);
 
         let (ic_cmt, blinds, ram_hints) = self.ic_to_ram(
             &ic_gens,
@@ -535,7 +542,7 @@ impl<F: arkPrimeField> MemBuilder<F> {
 
     // should only be used for testing
     pub fn get_mem_wits(&self) -> &HashMap<usize, MemElem<F>> {
-        &self.mem   
+        &self.mem
     }
 }
 
@@ -638,7 +645,7 @@ impl<F: arkPrimeField> RunningMem<F> {
 
     // should only be used for testing
     pub fn get_mem_wits(&self) -> &HashMap<F, MemElem<F>> {
-        &self.mem_wits    
+        &self.mem_wits
     }
 
     pub fn begin_new_circuit(
@@ -1039,12 +1046,12 @@ impl<F: arkPrimeField> RunningMem<F> {
 // deterministic
 pub fn sample_challenge(ic_cmts: &Vec<N2>) -> N1 {
     let ro_consts = ROConstants::<E1>::default();
-    let mut hasher = <E1 as Engine>::RO::new(ro_consts, ic_cmts.len());
+    let mut hasher = <E1 as Engine>::RO::new(ro_consts);
     for c in ic_cmts {
         hasher.absorb(*c);
     }
 
-    hasher.squeeze(250) // num hash bits from nova
+    scalar_as_base::<E2>(hasher.squeeze(250)) // num hash bits from nova
 }
 
 mod tests {
@@ -1061,14 +1068,14 @@ mod tests {
     use ff::Field as novaField;
     use ff::PrimeField as novaPrimeField;
     use nova_snark::{
-        provider::hyrax_pc::HyraxPC,
+        nova::{CompressedSNARK, PublicParams, RecursiveSNARK},
         traits::{circuit::TrivialCircuit, snark::default_ck_hint, Engine},
-        CompressedSNARK, PublicParams, RecursiveSNARK,
     };
 
-    type A = ark_pallas::Fr;
+    //bn256, grumpkin
+    type A = ark_bn254::Fr;
 
-    type EE1 = nova_snark::provider::ipa_pc::EvaluationEngine<E1>;
+    type EE1 = nova_snark::provider::hyperkzg::EvaluationEngine<E1>;
     type EE2 = nova_snark::provider::ipa_pc::EvaluationEngine<E2>;
     type S1 = nova_snark::spartan::snark::RelaxedR1CSSNARK<E1, EE1>;
     type S2 = nova_snark::spartan::snark::RelaxedR1CSSNARK<E2, EE2>;
@@ -1257,7 +1264,6 @@ mod tests {
             mem_builder.new_running_mem(batch_size, false);
 
         // nova
-        let mut circuit_secondary = TrivialCircuit::default();
         let mut running_is = A::one();
         let mut running_rs = A::one();
         let mut running_ws = A::one();
@@ -1280,39 +1286,27 @@ mod tests {
             .to_vec();
 
         // produce public parameters
-        let pp = PublicParams::<
-            E1,
-            E2,
-            FCircuit<<E1 as Engine>::Scalar>,
-            TrivialCircuit<<E2 as Engine>::Scalar>,
-        >::setup(
+
+        let ram_batch_sizes = vec![
+            rm.is_priv_per_batch * (3 + rm.elem_len),
+            batch_size * 2 * (3 + rm.elem_len) + rm.fs_priv_per_batch * (3 + rm.elem_len),
+        ];
+        let pp = PublicParams::<E1, E2, FCircuit<<E1 as Engine>::Scalar>>::setup(
             &mut circuit_primary,
-            &mut circuit_secondary,
             &*default_ck_hint(),
             &*default_ck_hint(),
-            //rm.scan_per_batch * (3 + rm.elem_len),
-            vec![
-                rm.is_priv_per_batch * (3 + rm.elem_len),
-                batch_size * 2 * (3 + rm.elem_len) + rm.fs_priv_per_batch * (3 + rm.elem_len),
-            ],
-            &[&ic_gens[0].ped_gen, &ic_gens[1].ped_gen],
+            ram_batch_sizes.clone(),
         )
         .unwrap();
 
         // produce a recursive SNARK
-        let mut recursive_snark = RecursiveSNARK::<
-            E1,
-            E2,
-            FCircuit<<E1 as Engine>::Scalar>,
-            TrivialCircuit<<E2 as Engine>::Scalar>,
-        >::new(
+        let mut recursive_snark = RecursiveSNARK::<E1, E2, FCircuit<<E1 as Engine>::Scalar>>::new(
             &pp,
             &mut circuit_primary,
-            &mut circuit_secondary,
             &z0_primary,
-            &[<E2 as Engine>::Scalar::ZERO],
             Some(blinds[0].clone()),
             ram_hints[0].clone(),
+            ram_batch_sizes.clone(),
         )
         .unwrap();
 
@@ -1321,17 +1315,16 @@ mod tests {
             let res = recursive_snark.prove_step(
                 &pp,
                 &mut circuit_primary,
-                &mut circuit_secondary,
                 Some(blinds[i].clone()),
                 ram_hints[i].clone(),
+                ram_batch_sizes.clone(),
             );
             assert!(res.is_ok());
             res.unwrap();
 
             let zi_primary = circuit_primary.get_zi();
             // verify the recursive SNARK
-            let res =
-                recursive_snark.verify(&pp, i + 1, &z0_primary, &[<E2 as Engine>::Scalar::ZERO]);
+            let res = recursive_snark.verify(&pp, i + 1, &z0_primary);
             assert!(res.is_ok());
 
             if i < num_iters - 1 {
@@ -1349,20 +1342,19 @@ mod tests {
         }
 
         // produce the prover and verifier keys for compressed snark
-        let (pk, vk) = CompressedSNARK::<_, _, _, _, S1, S2>::setup(&pp).unwrap();
+        let (pk, vk) = CompressedSNARK::<_, _, _, S1, S2>::setup(&pp).unwrap();
 
         // produce a compressed SNARK
-        let res = CompressedSNARK::<_, _, _, _, S1, S2>::prove(&pp, &pk, &recursive_snark);
+        let res = CompressedSNARK::<_, _, _, S1, S2>::prove(&pp, &pk, &recursive_snark);
         assert!(res.is_ok());
         let compressed_snark = res.unwrap();
 
         // verify the compressed SNARK
-        let res =
-            compressed_snark.verify(&vk, num_iters, &z0_primary, &[<E2 as Engine>::Scalar::ZERO]);
+        let res = compressed_snark.verify(&vk, num_iters, &z0_primary);
         assert!(res.is_ok());
 
         // check final cmt outputs
-        let (zn, _) = res.unwrap();
+        let (zn, Ci) = res.unwrap();
 
         let (pub_is, pub_fs) = rm.get_pub_is_fs_hashes();
 
@@ -1375,7 +1367,7 @@ mod tests {
         // incr cmt = acc cmt (verifier)
         for i in 0..C_final.len() {
             println!("{}", i);
-            assert_eq!(C_final[i], compressed_snark.Ci[i]);
+            assert_eq!(C_final[i], Ci[i]);
         }
     }
 

@@ -7,12 +7,13 @@ use ark_r1cs_std::{
 use ark_relations::gr1cs::{
     ConstraintSystemRef, Namespace, SynthesisError as arkSynthesisError, R1CS_PREDICATE_LABEL,
 };
-use bellpepper_core::{
-    num::AllocatedNum, ConstraintSystem, LinearCombination, SynthesisError as bpSynthesisError,
-};
 use core::borrow::Borrow;
 use ff::{Field as novaField, PrimeField as novaPrimeField};
+use halo2curves::serde::Repr;
 use itertools::Either;
+use nova_snark::frontend::{
+    num::AllocatedNum, ConstraintSystem, LinearCombination, SynthesisError as bpSynthesisError,
+};
 use nova_snark::traits::circuit::StepCircuit;
 use rayon::iter::ParallelBridge;
 use rayon::prelude::*;
@@ -38,7 +39,7 @@ impl<A: arkPrimeField> AllocIoVar<A, A> for FpVar<A> {}
 
 pub fn ark_to_nova_field<
     A: arkPrimeField<BigInt = BigInteger256>,
-    N: novaPrimeField<Repr = [u8; 32]>,
+    N: novaPrimeField<Repr = Repr<32>>,
 >(
     ark_ff: &A,
 ) -> N {
@@ -49,7 +50,7 @@ pub fn ark_to_nova_field<
     let bytes = u64x4_to_u8x32(&b.0);
 
     // bytes -> nova F
-    N::from_repr(TryInto::<[u8; 32]>::try_into(bytes).unwrap()).unwrap()
+    N::from_repr(TryInto::<Repr<32>>::try_into(bytes).unwrap()).unwrap()
 }
 
 fn u64x4_to_u8x32(input: &[u64; 4]) -> [u8; 32] {
@@ -60,12 +61,12 @@ fn u64x4_to_u8x32(input: &[u64; 4]) -> [u8; 32] {
     output
 }
 
-pub fn nova_to_ark_field<N: novaPrimeField<Repr = [u8; 32]>, A: arkPrimeField>(nova_ff: &N) -> A {
+pub fn nova_to_ark_field<N: novaPrimeField<Repr = Repr<32>>, A: arkPrimeField>(nova_ff: &N) -> A {
     // nova F -> bytes
     let b = nova_ff.to_repr();
 
     // bytes -> ark F
-    A::from_le_bytes_mod_order(&b)
+    A::from_le_bytes_mod_order(b.inner())
 }
 
 fn bellpepper_lc<N: novaPrimeField, CS: ConstraintSystem<N>>(
@@ -95,7 +96,7 @@ fn bellpepper_lc<N: novaPrimeField, CS: ConstraintSystem<N>>(
 }
 
 #[derive(Clone, Debug)]
-pub struct FCircuit<N: novaPrimeField<Repr = [u8; 32]>> {
+pub struct FCircuit<N: novaPrimeField<Repr = Repr<32>>> {
     pub lcs: Either<
         Vec<(Vec<(N, usize)>, Vec<(N, usize)>, Vec<(N, usize)>)>,
         Arc<
@@ -111,7 +112,7 @@ pub struct FCircuit<N: novaPrimeField<Repr = [u8; 32]>> {
     output_assignments: Vec<N>,
 }
 
-impl<N: novaPrimeField<Repr = [u8; 32]>> FCircuit<N> {
+impl<N: novaPrimeField<Repr = Repr<32>>> FCircuit<N> {
     // make circuits and witnesses for round i
     // the ark_cs should only have witness and input/output PAIRs
     // (i.e. a user should have never called new_input())
@@ -202,7 +203,7 @@ impl<N: novaPrimeField<Repr = [u8; 32]>> FCircuit<N> {
     }
 }
 
-impl<N: novaPrimeField<Repr = [u8; 32]>> StepCircuit<N> for FCircuit<N> {
+impl<N: novaPrimeField<Repr = Repr<32>>> StepCircuit<N> for FCircuit<N> {
     fn arity(&self) -> usize {
         self.output_assignments.len()
     }
@@ -279,7 +280,7 @@ impl<N: novaPrimeField<Repr = [u8; 32]>> StepCircuit<N> for FCircuit<N> {
 #[cfg(test)]
 mod tests {
 
-    use crate::bellpepper::*;
+    use crate::{bellpepper::*, utils::*};
     use ark_ff::{BigInt, One, Zero};
     use ark_r1cs_std::eq::EqGadget;
     use ark_r1cs_std::GR1CSVar;
@@ -289,21 +290,19 @@ mod tests {
     };
     use ff::PrimeField as novaPrimeField;
     use nova_snark::{
+        nova::{CompressedSNARK, PublicParams, RecursiveSNARK},
         traits::{
             circuit::TrivialCircuit, evaluation::EvaluationEngineTrait, snark::default_ck_hint,
             Engine, Group,
         },
-        CompressedSNARK, PublicParams, RecursiveSNARK,
     };
     use rand::{rngs::OsRng, RngCore};
 
-    type NG = pasta_curves::pallas::Point;
+    type NG = nova_snark::provider::bn256_grumpkin::bn256::Point;
     type NS = <NG as Group>::Scalar;
-    type AF = ark_pallas::Fr;
+    type AF = ark_bn254::Fr;
 
-    type E1 = nova_snark::provider::PallasEngine;
-    type E2 = nova_snark::provider::VestaEngine;
-    type EE1 = nova_snark::provider::ipa_pc::EvaluationEngine<E1>;
+    type EE1 = nova_snark::provider::hyperkzg::EvaluationEngine<E1>;
     type EE2 = nova_snark::provider::ipa_pc::EvaluationEngine<E2>;
     type S1 = nova_snark::spartan::snark::RelaxedR1CSSNARK<E1, EE1>;
     type S2 = nova_snark::spartan::snark::RelaxedR1CSSNARK<E2, EE2>;
@@ -419,7 +418,6 @@ mod tests {
         zi_list: Vec<Vec<AF>>,
         num_steps: usize,
     ) -> Vec<NS> {
-        let mut circuit_secondary = TrivialCircuit::default();
         let mut circuit_primary = make_ark_circuit(&zi_list[0], None);
 
         let z0_primary = circuit_primary.get_zi().clone();
@@ -432,34 +430,21 @@ mod tests {
         );
 
         // produce public parameters
-        let pp = PublicParams::<
-            E1,
-            E2,
-            FCircuit<<E1 as Engine>::Scalar>,
-            TrivialCircuit<<E2 as Engine>::Scalar>,
-        >::setup(
+        let pp = PublicParams::<E1, E2, FCircuit<<E1 as Engine>::Scalar>>::setup(
             &mut circuit_primary,
-            &mut circuit_secondary,
             &*default_ck_hint(),
             &*default_ck_hint(),
             vec![],
-            &[],
         )
         .unwrap();
 
         // produce a recursive SNARK
-        let mut recursive_snark = RecursiveSNARK::<
-            E1,
-            E2,
-            FCircuit<<E1 as Engine>::Scalar>,
-            TrivialCircuit<<E2 as Engine>::Scalar>,
-        >::new(
+        let mut recursive_snark = RecursiveSNARK::<E1, E2, FCircuit<<E1 as Engine>::Scalar>>::new(
             &pp,
             &mut circuit_primary,
-            &mut circuit_secondary,
             &z0_primary,
-            &[<E2 as Engine>::Scalar::ZERO],
             None,
+            vec![],
             vec![],
         )
         .unwrap();
@@ -467,13 +452,7 @@ mod tests {
         let saved_nova_matrices = circuit_primary.lcs.as_ref().right().unwrap().clone();
 
         for i in 0..num_steps {
-            let res = recursive_snark.prove_step(
-                &pp,
-                &mut circuit_primary,
-                &mut circuit_secondary,
-                None,
-                vec![],
-            );
+            let res = recursive_snark.prove_step(&pp, &mut circuit_primary, None, vec![], vec![]);
             assert!(res.is_ok());
             res.unwrap();
 
@@ -481,11 +460,10 @@ mod tests {
         }
 
         // verify the recursive SNARK
-        let res =
-            recursive_snark.verify(&pp, num_steps, &z0_primary, &[<E2 as Engine>::Scalar::ZERO]);
+        let res = recursive_snark.verify(&pp, num_steps, &z0_primary);
         assert!(res.is_ok());
 
-        let (zn_primary, zn_secondary) = res.unwrap();
+        let zn_primary = res.unwrap();
         assert_eq!(
             zn_primary,
             zi_list[num_steps]
@@ -495,16 +473,15 @@ mod tests {
         );
 
         // produce the prover and verifier keys for compressed snark
-        let (pk, vk) = CompressedSNARK::<_, _, _, _, S1, S2>::setup(&pp).unwrap();
+        let (pk, vk) = CompressedSNARK::<_, _, _, S1, S2>::setup(&pp).unwrap();
 
         // produce a compressed SNARK
-        let res = CompressedSNARK::<_, _, _, _, S1, S2>::prove(&pp, &pk, &recursive_snark);
+        let res = CompressedSNARK::<_, _, _, S1, S2>::prove(&pp, &pk, &recursive_snark);
         assert!(res.is_ok());
         let compressed_snark = res.unwrap();
 
         // verify the compressed SNARK
-        let res =
-            compressed_snark.verify(&vk, num_steps, &z0_primary, &[<E2 as Engine>::Scalar::ZERO]);
+        let res = compressed_snark.verify(&vk, num_steps, &z0_primary);
         assert!(res.is_ok());
 
         return zn_primary;
@@ -552,113 +529,5 @@ mod tests {
         b_out.enforce_equal(&((b_in + a_in) + &i_wit)).unwrap();
 
         FCircuit::new(cs, saved_nova_matrices)
-    }
-
-    pub fn run_prover(zi_list: Vec<Vec<AF>>, num_steps: usize) {
-        // -> Vec<NS> {
-        //Round Zero to set up primary params
-
-        let mut circuit_primary = make_circuit_2(&zi_list[0], 0, None);
-
-        let z0_primary = circuit_primary.get_zi().clone();
-        assert_eq!(
-            z0_primary,
-            zi_list[0]
-                .iter()
-                .map(|f| ark_to_nova_field::<AF, NS>(f))
-                .collect::<Vec<NS>>()
-        );
-
-        let mut circuit_secondary = TrivialCircuit::default();
-
-        // produce public parameters
-        let pp = PublicParams::<
-            E1,
-            E2,
-            FCircuit<<E1 as Engine>::Scalar>,
-            TrivialCircuit<<E2 as Engine>::Scalar>,
-        >::setup(
-            &mut circuit_primary,
-            &mut circuit_secondary,
-            &*default_ck_hint(),
-            &*default_ck_hint(),
-            vec![],
-            &[],
-        )
-        .unwrap();
-
-        // produce a recursive SNARK
-        let mut recursive_snark = RecursiveSNARK::<
-            E1,
-            E2,
-            FCircuit<<E1 as Engine>::Scalar>,
-            TrivialCircuit<<E2 as Engine>::Scalar>,
-        >::new(
-            &pp,
-            &mut circuit_primary,
-            &mut circuit_secondary,
-            &z0_primary,
-            &[<E2 as Engine>::Scalar::zero()],
-            None,
-            vec![],
-        )
-        .unwrap();
-
-        //Actually prove things now
-        for i in 0..num_steps {
-            println!("round {:?}", i);
-            circuit_primary = make_circuit_2(&zi_list[i], i, None);
-
-            let res = recursive_snark.prove_step(
-                &pp,
-                &mut circuit_primary,
-                &mut circuit_secondary,
-                None,
-                vec![],
-            );
-            assert!(res.is_ok(), " res {:?}", res);
-
-            let v_res =
-                recursive_snark.verify(&pp, i + 1, &z0_primary, &[<E2 as Engine>::Scalar::zero()]);
-            assert!(v_res.is_ok(), "v_res {:?}", v_res);
-        }
-
-        // let v_res =
-        // recursive_snark.verify(&pp, num_steps, &z0_primary, &[<E2 as Engine>::Scalar::zero()]);
-
-        // let (zn_primary, zn_secondary) = v_res.unwrap();
-        // assert_eq!(
-        //     zn_primary,
-        //     zi_list[num_steps]
-        //         .iter()
-        //         .map(|f| ark_to_nova_field::<AF, NS>(f))
-        //         .collect::<Vec<NS>>()
-        // );
-
-        // // produce the prover and verifier keys for compressed snark
-        // let (pk, vk) = CompressedSNARK::<_, _, _, _, S1, S2>::setup(&pp).unwrap();
-
-        // // produce a compressed SNARK
-        // let res = CompressedSNARK::<_, _, _, _, S1, S2>::prove(&pp, &pk, &recursive_snark);
-        // assert!(res.is_ok());
-        // let compressed_snark = res.unwrap();
-
-        // // verify the compressed SNARK
-        // let res =
-        //     compressed_snark.verify(&vk, num_steps, &z0_primary, &[<E2 as Engine>::Scalar::ZERO]);
-        // assert!(res.is_ok());
-
-        // return zn_primary;
-    }
-
-    #[test]
-    fn test_prover() {
-        let zi_list = vec![
-            vec![AF::one(), AF::one()],     //0
-            vec![AF::one(), AF::from(2)],   //1
-            vec![AF::from(2), AF::from(4)], //2
-            vec![AF::from(4), AF::from(8)], //3
-        ];
-        run_prover(zi_list, 4);
     }
 }
