@@ -1122,17 +1122,18 @@ mod tests {
         assert!(res.is_ok());
         let (mut next_mem_ops, f) = res.unwrap();
 
-        /*for mo in &rw_mem_ops {
-            mo.print_vals();
-        }
         println!("INIT");
         for mo in &next_mem_ops {
+            mo.print_vals();
+        }
+        println!("RW");
+        for mo in &rw_mem_ops {
             mo.print_vals();
         }
         println!("FINAL");
         for mo in &f {
             mo.print_vals();
-        }*/
+        }
 
         next_mem_ops.extend(rw_mem_ops);
         next_mem_ops.extend(f);
@@ -1668,7 +1669,7 @@ mod tests {
     }
 
     #[test]
-    fn mem_basic_extra_init() {
+    fn mem_extra_init() {
         let mut mb = MemBuilder::new(2, vec![]);
         mb.init(1, vec![A::from(10), A::from(11)], MemType::PrivRAM);
         mb.init(2, vec![A::from(12), A::from(13)], MemType::PrivRAM);

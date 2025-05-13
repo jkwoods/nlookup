@@ -131,6 +131,7 @@ impl<N: novaPrimeField<Repr = Repr<32>>> FCircuit<N> {
         ark_cs_ref.finalize();
         if nova_matrices.is_none() {
             assert!(ark_cs_ref.is_satisfied().unwrap());
+            println!("ARK SAT");
         }
 
         let ark_cs = ark_cs_ref.borrow().unwrap();
