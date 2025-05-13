@@ -449,13 +449,7 @@ impl<F: arkPrimeField> MemBuilder<F> {
         rw_batch_size: usize,
         sep_final: bool, // true -> cmts/ivcify =  [is], [rs, ws], [fs]
                          // false -> cmts/ivcify = [is], [rs, ws, fs]
-    ) -> (
-        Incremental<E1, E2>,
-        Vec<N2>,
-        Vec<Vec<N1>>,
-        Vec<Vec<N1>>,
-        RunningMem<F>,
-    ) {
+    ) -> (Vec<N2>, Vec<Vec<N1>>, Vec<Vec<N1>>, RunningMem<F>) {
         assert_eq!(self.rs.len(), self.ws.len());
         assert!(self.rs.len() > 0);
         assert_eq!(self.rs.len() % rw_batch_size, 0); // assumes exact padding
@@ -517,7 +511,6 @@ impl<F: arkPrimeField> MemBuilder<F> {
         let perm_chal = nova_to_ark_field::<N1, F>(&sample_challenge(&ic_cmt));
 
         (
-            ic_gens,
             ic_cmt,
             blinds,
             ram_hints,
@@ -1261,8 +1254,7 @@ mod tests {
             &mut Vec<MemElemWires<A>>,
         ),
     ) {
-        let (ic_gens, C_final, blinds, ram_hints, mut rm) =
-            mem_builder.new_running_mem(batch_size, false);
+        let (C_final, blinds, ram_hints, mut rm) = mem_builder.new_running_mem(batch_size, false);
 
         // nova
         let mut running_is = A::one();
