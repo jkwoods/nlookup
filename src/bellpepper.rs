@@ -131,7 +131,6 @@ impl<N: novaPrimeField<Repr = Repr<32>>> FCircuit<N> {
         ark_cs_ref.finalize();
         if nova_matrices.is_none() {
             assert!(ark_cs_ref.is_satisfied().unwrap());
-            println!("ARK SAT");
         }
 
         let ark_cs = ark_cs_ref.borrow().unwrap();
@@ -506,9 +505,6 @@ mod tests {
         let i_wit = FpVar::new_witness(cs.clone(), || Ok(AF::from(i as u32))).unwrap();
         let a_val = z_in[0].clone();
         let b_val = z_in[1].clone();
-
-        println!("a val {:?}", a_val);
-        println!("b val {:?}", b_val);
 
         let (a_in, a_out) = FpVar::new_input_output_pair(
             cs.clone(),

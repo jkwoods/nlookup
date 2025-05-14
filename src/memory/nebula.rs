@@ -493,7 +493,6 @@ impl<F: arkPrimeField> MemBuilder<F> {
         let key_len = (is_priv_per_batch + fs_priv_per_batch) * (3 + self.elem_len)
             + rw_batch_size * 2 * (3 + self.elem_len);
 
-        println!("key len {:#?}", key_len);
         let mut ic_gens = Incremental::<E1, E2>::setup(key_len);
 
         let (ic_cmt, blinds, ram_hints) = self.ic_to_ram(
@@ -1115,7 +1114,7 @@ mod tests {
         assert!(res.is_ok());
         let (mut next_mem_ops, f) = res.unwrap();
 
-        println!("INIT");
+        /*println!("INIT");
         for mo in &next_mem_ops {
             mo.print_vals();
         }
@@ -1126,7 +1125,7 @@ mod tests {
         println!("FINAL");
         for mo in &f {
             mo.print_vals();
-        }
+        }*/
 
         next_mem_ops.extend(rw_mem_ops);
         next_mem_ops.extend(f);
@@ -1201,8 +1200,8 @@ mod tests {
         assert_eq!(prev_ops.len(), next_ops.len());
 
         for i in 0..prev_ops.len() {
-            println!("IVC OP");
-            println!("{:#?}", next_ops[i].time.value()?);
+            //println!("IVC OP");
+            //println!("{:#?}", next_ops[i].time.value()?);
             let (time_in, time_out) = FpVar::new_input_output_pair(
                 cs.clone(),
                 || Ok(prev_ops[i].time.value()?),
@@ -1211,7 +1210,7 @@ mod tests {
             //        prev_ops[i].time.enforce_equal(&time_in)?;
             next_ops[i].time.enforce_equal(&time_out)?;
 
-            println!("{:#?}", next_ops[i].addr.value()?);
+            //println!("{:#?}", next_ops[i].addr.value()?);
             let (addr_in, addr_out) = FpVar::new_input_output_pair(
                 cs.clone(),
                 || Ok(prev_ops[i].addr.value()?),
@@ -1220,7 +1219,7 @@ mod tests {
             //    prev_ops[i].addr.enforce_equal(&addr_in)?;
             next_ops[i].addr.enforce_equal(&addr_out)?;
 
-            println!("{:#?}", next_ops[i].sr.value()?);
+            //println!("{:#?}", next_ops[i].sr.value()?);
             let (sr_in, sr_out) = FpVar::new_input_output_pair(
                 cs.clone(),
                 || Ok(prev_ops[i].sr.value()?),
@@ -1230,7 +1229,7 @@ mod tests {
             next_ops[i].sr.enforce_equal(&sr_out)?;
 
             for j in 0..prev_ops[i].vals.len() {
-                println!("{:#?}", next_ops[i].vals[j].value()?);
+                //println!("{:#?}", next_ops[i].vals[j].value()?);
                 let (val_j_in, val_j_out) = FpVar::new_input_output_pair(
                     cs.clone(),
                     || Ok(prev_ops[i].vals[j].value()?),
@@ -1344,7 +1343,6 @@ mod tests {
 
         // verify the compressed SNARK
         let res = compressed_snark.verify(&vk, num_iters, &z0_primary);
-        println!("res {:#?}", res);
         assert!(res.is_ok());
 
         // check final cmt outputs
@@ -1360,7 +1358,7 @@ mod tests {
 
         // incr cmt = acc cmt (verifier)
         for i in 0..C_final.len() {
-            println!("{}", i);
+            //    println!("{}", i);
             assert_eq!(C_final[i], Ci[i]);
         }
     }
