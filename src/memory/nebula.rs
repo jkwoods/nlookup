@@ -1344,6 +1344,7 @@ mod tests {
 
         // verify the compressed SNARK
         let res = compressed_snark.verify(&vk, num_iters, &z0_primary);
+        println!("res {:#?}", res);
         assert!(res.is_ok());
 
         // check final cmt outputs
