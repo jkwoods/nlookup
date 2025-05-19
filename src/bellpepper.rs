@@ -69,6 +69,19 @@ pub fn nova_to_ark_field<N: novaPrimeField<Repr = Repr<32>>, A: arkPrimeField>(n
     A::from_le_bytes_mod_order(b.inner())
 }
 
+pub fn ark_to_u64<A: arkPrimeField<BigInt = BigInteger256>>(ark_ff: &A) -> u64 {
+    // ark F -> ark BigInt
+    let b = ark_ff.into_bigint();
+
+    let limbs: [u64; 4] = b.0;
+
+    assert_eq!(limbs[1], 0);
+    assert_eq!(limbs[2], 0);
+    assert_eq!(limbs[3], 0);
+
+    limbs[0]
+}
+
 fn bellpepper_lc<N: novaPrimeField, CS: ConstraintSystem<N>>(
     alloc_io: &Vec<AllocatedNum<N>>,
     alloc_wits: &Vec<AllocatedNum<N>>,
