@@ -142,9 +142,9 @@ impl<N: novaPrimeField<Repr = Repr<32>>> FCircuit<N> {
         >,
     ) -> Self {
         ark_cs_ref.finalize();
-        /*        if nova_matrices.is_none() {
+        if nova_matrices.is_none() {
             assert!(ark_cs_ref.is_satisfied().unwrap());
-        }*/
+        }
 
         let ark_cs = ark_cs_ref.borrow().unwrap();
 
@@ -498,46 +498,5 @@ mod tests {
         assert!(res.is_ok());
 
         return zn_primary;
-    }
-
-    fn make_circuit_2(
-        z_in: &Vec<AF>,
-        i: usize,
-        saved_nova_matrices: Option<
-            Arc<
-                Vec<(
-                    LinearCombination<NS>,
-                    LinearCombination<NS>,
-                    LinearCombination<NS>,
-                )>,
-            >,
-        >,
-    ) -> FCircuit<NS> {
-        let cs = ConstraintSystem::<AF>::new_ref();
-
-        let i_wit = FpVar::new_witness(cs.clone(), || Ok(AF::from(i as u32))).unwrap();
-        let a_val = z_in[0].clone();
-        let b_val = z_in[1].clone();
-
-        let (a_in, a_out) = FpVar::new_input_output_pair(
-            cs.clone(),
-            || Ok(a_val),
-            || Ok(a_val + i_wit.value().unwrap()),
-        )
-        .unwrap();
-        let (b_in, b_out) = FpVar::new_input_output_pair(
-            cs.clone(),
-            || Ok(b_val),
-            || Ok((b_val + a_val) + i_wit.value().unwrap()),
-        )
-        .unwrap();
-
-        // a_in + i = a_out
-        a_out.enforce_equal(&(a_in.clone() + &i_wit)).unwrap();
-
-        // (b_in + a_in) + i = b_out
-        b_out.enforce_equal(&((b_in + a_in) + &i_wit)).unwrap();
-
-        FCircuit::new(cs, saved_nova_matrices)
     }
 }

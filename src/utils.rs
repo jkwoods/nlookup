@@ -1,11 +1,13 @@
 use ark_crypto_primitives::sponge::poseidon::{find_poseidon_ark_and_mds, PoseidonConfig};
-use ark_ff::{BigInteger, PrimeField};
+use ark_ff::{BigInteger256, PrimeField};
 use ark_r1cs_std::{
     alloc::AllocVar, boolean::Boolean, eq::EqGadget, fields::fp::FpVar, fields::FieldVar,
     prelude::AllocationMode, GR1CSVar,
 };
-use ark_relations::gr1cs::SynthesisError;
+use ark_relations::gr1cs::{ConstraintSystemRef, SynthesisError};
 use nova_snark::traits::Engine;
+
+pub trait arkPrimeField = PrimeField<BigInt = BigInteger256>;
 
 // we have to hardcode these, unfortunately
 pub(crate) type E1 = nova_snark::provider::Bn256EngineKZG;
@@ -67,6 +69,18 @@ pub fn horners<F: PrimeField>(coeffs: &Vec<FpVar<F>>, x: &FpVar<F>) -> FpVar<F> 
     horners = horners + &coeffs[0];
 
     horners
+}
+
+// from Eli
+pub fn custom_ge<F: arkPrimeField>(
+    l: &FpVar<F>,
+    g: &FpVar<F>,
+    max_val: usize,
+    cs: ConstraintSystemRef<F>,
+) -> Result<Boolean<F>, SynthesisError> {
+    let max_val_fpv = FpVar::new_constant(cs.clone(), F::from((max_val + 1) as u64))?;
+    let (bits, _) = (g - l + max_val_fpv).to_bits_le_with_top_bits_zero(logmn(max_val) + 1)?;
+    Ok(bits.last().unwrap().clone())
 }
 
 // from Eli
