@@ -558,27 +558,27 @@ impl<F: arkPrimeField> MemBuilder<F> {
 
         let perm_chal = nova_to_ark_field::<N1, F>(&sample_challenge(&ic_cmt));
 
-        (
-            ic_cmt,
-            blinds,
-            ram_hints,
-            RunningMem {
-                priv_is: self.priv_is,
-                pub_is: self.pub_is,
-                mem_wits,
-                priv_fs: priv_fs.to_vec(),
-                pub_fs: pub_fs.to_vec(),
-                ts: F::zero(),
-                perm_chal,
-                elem_len: self.elem_len,
-                scan_per_batch: is_priv_per_batch,
-                s: 0,
-                stack_spaces: self.stack_spaces,
-                mem_spaces: self.mem_spaces,
-                priv_cut_off,
-                padding,
-            },
-        )
+        let mut rm = RunningMem {
+            priv_is: self.priv_is,
+            pub_is: self.pub_is,
+            mem_wits,
+            priv_fs: priv_fs.to_vec(),
+            pub_fs: pub_fs.to_vec(),
+            pub_hashes: (F::zero(), F::zero()),
+            ts: F::zero(),
+            perm_chal,
+            elem_len: self.elem_len,
+            scan_per_batch: is_priv_per_batch,
+            s: 0,
+            stack_spaces: self.stack_spaces,
+            mem_spaces: self.mem_spaces,
+            priv_cut_off,
+            padding,
+        };
+
+        rm.pub_hashes = rm.get_pub_is_fs_hashes();
+
+        (ic_cmt, blinds, ram_hints, rm)
     }
 
     // should only be used for testing
@@ -594,6 +594,7 @@ pub struct RunningMem<F: arkPrimeField> {
     mem_wits: HashMap<F, MemElem<F>>,
     priv_fs: Vec<MemElem<F>>,
     pub_fs: Vec<MemElem<F>>,
+    pub_hashes: (F, F),
     ts: F,
     perm_chal: F,
     pub elem_len: usize,
@@ -634,6 +635,7 @@ impl<F: arkPrimeField> RunningMem<F> {
             mem_wits,
             priv_fs: vec![self.padding.clone(); self.priv_fs.len()],
             pub_fs: self.pub_fs.clone(),
+            pub_hashes: self.pub_hashes.clone(),
             ts: F::zero(),
             perm_chal: self.perm_chal,
             elem_len: self.elem_len,
@@ -979,7 +981,8 @@ impl<F: arkPrimeField> RunningMem<F> {
     pub fn scan(
         &mut self,
         w: &mut RunningMemWires<F>,
-    ) -> Result<(Vec<MemElemWires<F>>, Vec<MemElemWires<F>>), SynthesisError> {
+        last_round: bool, // is this the last folding?
+    ) -> Result<(Vec<MemElemWires<F>>, Vec<MemElemWires<F>>, Boolean<F>), SynthesisError> {
         let mut is_elems = Vec::new();
         let mut fs_elems = Vec::new();
 
@@ -1007,19 +1010,7 @@ impl<F: arkPrimeField> RunningMem<F> {
             };
 
             // t < ts hack
-            //   initial_mem_elem.time.enforce_equal(&FpVar::zero())?;
-
-            // public memory not in scan check
-            /*let mut priv_membership = Vec::new();
-                        for p in 0..self.priv_cut_off {
-                            priv_membership.push(
-                                initial_mem_elem
-                                    .sr
-                                    .is_eq(&FpVar::constant(F::from(p as u64)))?,
-                            );
-                        }
-                        Boolean::kary_or(&priv_membership)?.enforce_equal(&Boolean::TRUE)?;
-            */
+            initial_mem_elem.time.enforce_equal(&FpVar::zero())?;
 
             // IS check
             let next_running_is =
@@ -1048,13 +1039,6 @@ impl<F: arkPrimeField> RunningMem<F> {
                 )
             };
 
-            // public memory not in scan check
-            /*Boolean::kary_or(&[
-                final_mem_elem.sr.is_eq(&FpVar::zero())?,
-                final_mem_elem.sr.is_eq(&FpVar::one())?,
-            ])?
-            .enforce_equal(&Boolean::TRUE)?;*/
-
             // FS check
             let next_running_fs =
                 &w.running_fs * final_mem_elem.hash(w.cs.clone(), &w.perm_chal)?;
@@ -1076,7 +1060,18 @@ impl<F: arkPrimeField> RunningMem<F> {
             is_elems.push(initial_mem_elem);
         }
 
-        Ok((is_elems, fs_elems))
+        // final check
+        let last_check = Boolean::new_witness(w.cs.clone(), || Ok(last_round))?;
+        &(&w.running_is * &w.running_ws * &FpVar::constant(self.pub_hashes.0))
+            .is_eq(&(&w.running_fs * &w.running_rs * &FpVar::constant(self.pub_hashes.1)))?
+            .conditional_enforce_equal(&Boolean::TRUE, &last_check)?;
+
+        w.running_is = last_check.select(&FpVar::constant(F::zero()), &w.running_is)?;
+        w.running_rs = last_check.select(&FpVar::constant(F::zero()), &w.running_rs)?;
+        w.running_ws = last_check.select(&FpVar::constant(F::zero()), &w.running_ws)?;
+        w.running_fs = last_check.select(&FpVar::constant(F::zero()), &w.running_fs)?;
+
+        Ok((is_elems, fs_elems, last_check))
     }
 }
 
@@ -1132,6 +1127,7 @@ mod tests {
         running_ws: &mut A,
         running_fs: &mut A,
         stack_ptrs: &mut Vec<A>,
+        last_fold: bool,
     ) -> FCircuit<N1> {
         let cs = ConstraintSystem::<A>::new_ref();
         cs.set_optimization_goal(OptimizationGoal::Constraints);
@@ -1158,9 +1154,9 @@ mod tests {
 
         do_rw_ops(i, rm, &mut running_mem_wires, &mut rw_mem_ops);
 
-        let res = rm.scan(&mut running_mem_wires);
+        let res = rm.scan(&mut running_mem_wires, last_fold);
         assert!(res.is_ok());
-        let (mut next_mem_ops, f) = res.unwrap();
+        let (mut next_mem_ops, f, last_check) = res.unwrap();
 
         /*println!("INIT");
         for mo in &next_mem_ops {
@@ -1236,6 +1232,15 @@ mod tests {
         running_i_out
             .enforce_equal(&running_mem_wires.running_i)
             .unwrap();
+        // last
+        let (last_in, last_out) = Boolean::new_input_output_pair(
+            cs.clone(),
+            || Ok(last_check.value().unwrap()),
+            || Ok(last_check.value().unwrap()),
+        )
+        .unwrap();
+        // don't need in
+        last_out.enforce_equal(&last_check).unwrap();
 
         // running mem, stack ptrs, etc, needs to be ivcified too, but that doesn't effect our final checks
         // so we omit for now
@@ -1329,6 +1334,7 @@ mod tests {
             &mut running_ws,
             &mut running_fs,
             &mut stack_ptrs,
+            false,
         );
 
         let z0_primary_full = circuit_primary.get_zi();
@@ -1386,6 +1392,7 @@ mod tests {
                     &mut running_ws,
                     &mut running_fs,
                     &mut stack_ptrs,
+                    (i == num_iters - 2),
                 );
             }
         }
@@ -1406,12 +1413,12 @@ mod tests {
         let (zn, Ci) = res.unwrap();
 
         let (pub_is, pub_fs) = rm.get_pub_is_fs_hashes();
+        assert_eq!(pub_is, rm.pub_hashes.0);
+        assert_eq!(pub_fs, rm.pub_hashes.1);
 
+        println!("Z {:#?}", zn);
         // is * ws == rs * fs (verifier)
-        assert_eq!(
-            ark_to_nova_field::<A, N1>(&pub_is) * zn[0] * zn[2],
-            zn[1] * zn[3] * ark_to_nova_field::<A, N1>(&pub_fs)
-        );
+        assert_eq!(zn[5], N1::from(1));
 
         // incr cmt = acc cmt (verifier)
         for i in 0..C_final.len() {
