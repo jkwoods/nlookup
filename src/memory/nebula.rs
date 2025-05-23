@@ -35,7 +35,6 @@ pub struct MemElem<F: arkPrimeField> {
 
 impl<F: arkPrimeField> MemElem<F> {
     pub fn new_u(t: usize, a: usize, v: Vec<usize>, sr: usize) -> Self {
-        assert!(sr <= 2);
         MemElem {
             time: F::from(t as u64),
             addr: F::from(a as u64),
@@ -45,7 +44,6 @@ impl<F: arkPrimeField> MemElem<F> {
     }
 
     pub fn new_f(t: F, a: F, v: Vec<F>, sr: F) -> Self {
-        assert!(sr <= F::from(2));
         MemElem {
             time: t,
             addr: a,
