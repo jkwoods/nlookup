@@ -572,6 +572,7 @@ impl<F: arkPrimeField> MemBuilder<F> {
             mem_spaces: self.mem_spaces,
             priv_cut_off,
             padding,
+            dummy_mode: false,
         };
 
         rm.pub_hashes = rm.get_pub_is_fs_hashes();
@@ -604,6 +605,7 @@ pub struct RunningMem<F: arkPrimeField> {
     mem_spaces: Vec<MemType>,
     priv_cut_off: usize,
     padding: MemElem<F>,
+    dummy_mode: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -622,10 +624,11 @@ pub struct RunningMemWires<F: arkPrimeField> {
 
 impl<F: arkPrimeField> RunningMem<F> {
     pub fn get_dummy(&self) -> Self {
-        let mut mem_wits = self.mem_wits.clone();
+        let mut mem_wits = HashMap::new();
+        /*self.mem_wits.clone();
         for (_, elem) in mem_wits.iter_mut() {
             *elem = self.padding.clone();
-        }
+        }*/
 
         Self {
             priv_is: vec![self.padding.clone(); self.priv_is.len()],
@@ -643,6 +646,7 @@ impl<F: arkPrimeField> RunningMem<F> {
             mem_spaces: self.mem_spaces.clone(),
             priv_cut_off: self.priv_cut_off,
             padding: self.padding.clone(),
+            dummy_mode: true,
         }
     }
 
@@ -921,7 +925,11 @@ impl<F: arkPrimeField> RunningMem<F> {
         // t < ts hacked in other part of code
 
         // RS = RS * tup
-        let read_wit = self.mem_wits.get(&addr.value()?).unwrap();
+        let read_wit = if self.dummy_mode {
+            &self.padding
+        } else {
+            self.mem_wits.get(&addr.value()?).unwrap()
+        };
         assert_eq!(read_wit.addr, addr.value()?);
 
         let read_mem_elem = MemElemWires::new(
