@@ -174,6 +174,7 @@ impl<F: arkPrimeField> MemBuilder<F> {
             for (i, s) in stack_sizes.iter().enumerate() {
                 stack_ptrs.push(stack_limit);
                 stack_limit += s;
+                assert!((stack_limit as u64) < (1_u64 << 32));
                 stack_spaces.push(stack_limit);
             }
         }
@@ -243,6 +244,7 @@ impl<F: arkPrimeField> MemBuilder<F> {
 
         if cond {
             self.ts += 1;
+            assert!((self.ts as u64) < (1_u64 << 32));
         }
 
         let write_elem = MemElem::new_f(
@@ -274,6 +276,7 @@ impl<F: arkPrimeField> MemBuilder<F> {
     fn inner_init(&mut self, addr: usize, vals: Vec<F>, mem_tag: MemType) {
         assert_eq!(vals.len(), self.elem_len, "Element not correct length");
         assert!(!self.mem.contains_key(&addr));
+        assert!((addr as u64) < (1_u64 << 32));
 
         let sr = match mem_tag {
             MemType::PrivStack(stack_tag) => {
@@ -310,6 +313,7 @@ impl<F: arkPrimeField> MemBuilder<F> {
         self.rs.push(read_elem.clone());
         if cond {
             self.ts += 1;
+            assert!((self.ts as u64) < (1_u64 << 32));
         }
 
         let write_elem = MemElem::new_f(
@@ -741,13 +745,27 @@ impl<F: arkPrimeField> RunningMem<F> {
         assert_eq!(w.stack_ptrs.len(), self.stack_spaces.len() - 1);
         assert!(stack_tag < self.stack_spaces.len());
 
-        let res = self.conditional_op(cond, &w.stack_ptrs[stack_tag].clone(), Some(vals), 0, w);
+        let mut cee_pack_l = Vec::new();
+        let mut cee_pack_r = Vec::new();
+
+        let res = self.conditional_op(
+            cond,
+            &w.stack_ptrs[stack_tag].clone(),
+            Some(vals),
+            0,
+            &mut cee_pack_l,
+            &mut cee_pack_r,
+            w,
+        )?;
 
         // sp ++
         let sp = FpVar::new_witness(w.cs.clone(), || {
             Ok(w.stack_ptrs[stack_tag].value()? + F::ONE)
         })?;
-        sp.conditional_enforce_equal(&(&w.stack_ptrs[stack_tag] + &FpVar::one()), &cond)?;
+        //sp.conditional_enforce_equal(&(&w.stack_ptrs[stack_tag] + &FpVar::one()), &cond)?;
+        cee_pack_l.push(sp.clone());
+        cee_pack_r.push(&w.stack_ptrs[stack_tag] + &FpVar::one());
+
         w.stack_ptrs[stack_tag] = cond.select(&sp, &w.stack_ptrs[stack_tag])?;
 
         // boundry check
@@ -759,7 +777,9 @@ impl<F: arkPrimeField> RunningMem<F> {
             cond,
         )?;
 
-        res
+        chunk_cee(cond, &cee_pack_l, &cee_pack_r, w.cs.clone())?;
+
+        Ok(res)
     }
 
     pub fn conditional_push(
@@ -795,7 +815,22 @@ impl<F: arkPrimeField> RunningMem<F> {
             m => self.mem_spaces.iter().position(|r| *r == m).unwrap() + 1,
         };
 
-        self.conditional_op(cond, addr, Some(vals), mem_tag, w)
+        let mut cee_pack_l = Vec::new();
+        let mut cee_pack_r = Vec::new();
+
+        let res = self.conditional_op(
+            cond,
+            addr,
+            Some(vals),
+            mem_tag,
+            &mut cee_pack_l,
+            &mut cee_pack_r,
+            w,
+        )?;
+
+        chunk_cee(cond, &cee_pack_l, &cee_pack_r, w.cs.clone())?;
+
+        Ok(res)
     }
 
     pub fn conditional_write(
@@ -838,14 +873,30 @@ impl<F: arkPrimeField> RunningMem<F> {
         assert_eq!(w.stack_ptrs.len(), self.stack_spaces.len() - 1);
         assert!(stack_tag < self.stack_spaces.len());
 
+        let mut cee_pack_l = Vec::new();
+        let mut cee_pack_r = Vec::new();
+
         // sp --
         let sp = FpVar::new_witness(w.cs.clone(), || {
             Ok(w.stack_ptrs[stack_tag].value()? - F::ONE)
         })?;
-        sp.conditional_enforce_equal(&(&w.stack_ptrs[stack_tag] - &FpVar::one()), &cond)?;
+        //        sp.conditional_enforce_equal(&(&w.stack_ptrs[stack_tag] - &FpVar::one()), &cond)?;
+        cee_pack_l.push(sp.clone());
+        cee_pack_r.push(&w.stack_ptrs[stack_tag] - &FpVar::one());
+
         w.stack_ptrs[stack_tag] = cond.select(&sp, &w.stack_ptrs[stack_tag])?;
 
-        let res = self.conditional_op(cond, &w.stack_ptrs[stack_tag].clone(), None, 0, w);
+        let res = self.conditional_op(
+            cond,
+            &w.stack_ptrs[stack_tag].clone(),
+            None,
+            0,
+            &mut cee_pack_l,
+            &mut cee_pack_r,
+            w,
+        )?;
+
+        chunk_cee(cond, &cee_pack_l, &cee_pack_r, w.cs.clone());
 
         // boundry check
         w.stack_ptrs[stack_tag].conditional_enforce_not_equal(
@@ -856,7 +907,7 @@ impl<F: arkPrimeField> RunningMem<F> {
             cond,
         )?;
 
-        res
+        Ok(res)
     }
 
     pub fn pop(
@@ -879,7 +930,22 @@ impl<F: arkPrimeField> RunningMem<F> {
             m => self.mem_spaces.iter().position(|r| *r == m).unwrap() + 1,
         };
 
-        self.conditional_op(cond, addr, None, mem_tag, w)
+        let mut cee_pack_l = Vec::new();
+        let mut cee_pack_r = Vec::new();
+
+        let res = self.conditional_op(
+            cond,
+            addr,
+            None,
+            mem_tag,
+            &mut cee_pack_l,
+            &mut cee_pack_r,
+            w,
+        )?;
+
+        chunk_cee(cond, &cee_pack_l, &cee_pack_r, w.cs.clone())?;
+
+        Ok(res)
     }
 
     pub fn conditional_read(
@@ -907,6 +973,8 @@ impl<F: arkPrimeField> RunningMem<F> {
         addr: &FpVar<F>,
         write_vals: Option<Vec<FpVar<F>>>,
         mem_type: usize,
+        cee_pack_l: &mut Vec<FpVar<F>>,
+        cee_pack_r: &mut Vec<FpVar<F>>,
         w: &mut RunningMemWires<F>,
     ) -> Result<(MemElemWires<F>, MemElemWires<F>), SynthesisError> {
         // ts = ts + 1
@@ -917,7 +985,10 @@ impl<F: arkPrimeField> RunningMem<F> {
                 w.ts_m1.value()?
             })
         })?;
-        ts.conditional_enforce_equal(&(&w.ts_m1 + &FpVar::one()), &cond)?;
+        //ts.conditional_enforce_equal(&(&w.ts_m1 + &FpVar::one()), &cond)?;
+        cee_pack_l.push(ts.clone());
+        cee_pack_r.push((&w.ts_m1 + &FpVar::one()));
+
         w.ts_m1 = cond.select(&ts, &w.ts_m1)?;
         if cond.value()? {
             self.ts = w.ts_m1.value()?;
@@ -948,10 +1019,15 @@ impl<F: arkPrimeField> RunningMem<F> {
         w.running_rs = cond.select(&next_running_rs, &w.running_rs)?;
 
         // memory namespace
-        read_mem_elem.sr.conditional_enforce_equal(
+        /*read_mem_elem.sr.conditional_enforce_equal(
             &FpVar::<F>::new_constant(w.cs.clone(), F::from(mem_type as u64))?,
             cond,
-        )?;
+        )?;*/
+        cee_pack_l.push(read_mem_elem.sr.clone());
+        cee_pack_r.push(FpVar::<F>::new_constant(
+            w.cs.clone(),
+            F::from(mem_type as u64),
+        )?);
 
         let v_prime = if write_vals.is_some() {
             let vals = write_vals.unwrap();
@@ -994,6 +1070,10 @@ impl<F: arkPrimeField> RunningMem<F> {
         let mut is_elems = Vec::new();
         let mut fs_elems = Vec::new();
 
+        let mut eez_pack = Vec::new();
+        let mut ee_addr_pack_l = Vec::new();
+        let mut ee_addr_pack_r = Vec::new();
+
         for _ in 0..self.scan_per_batch {
             let (initial_mem_elem, cond) = if self.s < self.priv_is.len() {
                 let is_wit = self.priv_is[self.s].clone();
@@ -1018,7 +1098,8 @@ impl<F: arkPrimeField> RunningMem<F> {
             };
 
             // t < ts hack
-            initial_mem_elem.time.enforce_equal(&FpVar::zero())?;
+            // initial_mem_elem.time.enforce_equal(&FpVar::zero())?;
+            eez_pack.push(initial_mem_elem.time.clone());
 
             // IS check
             let next_running_is =
@@ -1053,7 +1134,9 @@ impl<F: arkPrimeField> RunningMem<F> {
             w.running_fs = cond.select(&next_running_fs, &w.running_fs)?;
 
             // a = a' = i
-            initial_mem_elem.addr.enforce_equal(&final_mem_elem.addr)?;
+            // initial_mem_elem.addr.enforce_equal(&final_mem_elem.addr)?;
+            ee_addr_pack_l.push(initial_mem_elem.addr.clone());
+            ee_addr_pack_r.push(final_mem_elem.addr.clone());
 
             let not_padding = initial_mem_elem.addr.is_neq(&FpVar::zero())?;
             initial_mem_elem
@@ -1078,6 +1161,10 @@ impl<F: arkPrimeField> RunningMem<F> {
         w.running_rs = last_check.select(&FpVar::constant(F::zero()), &w.running_rs)?;
         w.running_ws = last_check.select(&FpVar::constant(F::zero()), &w.running_ws)?;
         w.running_fs = last_check.select(&FpVar::constant(F::zero()), &w.running_fs)?;
+
+        // packed
+        chunk_ee_zero(&eez_pack, &FpVar::constant(F::zero()), w.cs.clone())?;
+        chunk_ee(&ee_addr_pack_l, &ee_addr_pack_r, w.cs.clone())?;
 
         Ok((is_elems, fs_elems, last_check))
     }

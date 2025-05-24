@@ -23,7 +23,7 @@ pub fn logmn(mn: usize) -> usize {
 }
 
 // from eli
-/*pub fn chunk_cee<F: arkPrimeField>(
+pub fn chunk_cee<F: arkPrimeField>(
     cond: &Boolean<F>,
     l_vals: &Vec<FpVar<F>>,
     r_vals: &Vec<FpVar<F>>,
@@ -34,7 +34,7 @@ pub fn logmn(mn: usize) -> usize {
     let l_chunks = l_vals.chunks(7).map(|c| c.to_vec()).collect::<Vec<_>>();
     let r_chunks = r_vals.chunks(7).map(|c| c.to_vec()).collect::<Vec<_>>();
 
-    let mut shift_const = csc.shift_val;
+    let mut shift_const = F::from((1_u64 << 32));
 
     for (l_chunk, r_chunk) in l_chunks.iter().zip(r_chunks.iter()) {
         let mut l_pack = l_chunk[0].clone();
@@ -52,6 +52,34 @@ pub fn logmn(mn: usize) -> usize {
     Ok(())
 }
 
+pub fn chunk_ee<F: arkPrimeField>(
+    l_vals: &Vec<FpVar<F>>,
+    r_vals: &Vec<FpVar<F>>,
+    cs: ConstraintSystemRef<F>,
+) -> Result<(), SynthesisError> {
+    assert_eq!(l_vals.len(), r_vals.len());
+
+    let l_chunks = l_vals.chunks(7).map(|c| c.to_vec()).collect::<Vec<_>>();
+    let r_chunks = r_vals.chunks(7).map(|c| c.to_vec()).collect::<Vec<_>>();
+
+    let mut shift_const = F::from((1_u64 << 32));
+
+    for (l_chunk, r_chunk) in l_chunks.iter().zip(r_chunks.iter()) {
+        let mut l_pack = l_chunk[0].clone();
+        let mut r_pack = r_chunk[0].clone();
+
+        for i in 1..l_chunk.len() {
+            let shift = FpVar::new_constant(cs.clone(), shift_const)?;
+            l_pack = l_pack + (&l_chunk[i] * shift.clone());
+            r_pack = r_pack + (&r_chunk[i] * shift.clone());
+            shift_const = shift_const.square();
+        }
+        l_pack.enforce_equal(&r_pack)?;
+    }
+
+    Ok(())
+}
+
 pub fn chunk_cee_zero<F: arkPrimeField>(
     cond: &Boolean<F>,
     l_vals: &Vec<FpVar<F>>,
@@ -63,7 +91,7 @@ pub fn chunk_cee_zero<F: arkPrimeField>(
     for l_chunk in l_chunks.iter() {
         let mut l_pack = l_chunk[0].clone();
 
-        let mut shift_const = csc.shift_val;
+        let mut shift_const = F::from((1_u64 << 32));
 
         for i in 1..l_chunk.len() {
             let shift = FpVar::new_constant(cs.clone(), shift_const)?;
@@ -85,7 +113,7 @@ pub fn chunk_ee_zero<F: arkPrimeField>(
     for l_chunk in l_chunks.iter() {
         let mut l_pack = l_chunk[0].clone();
 
-        let mut shift_const = csc.shift_val;
+        let mut shift_const = F::from((1_u64 << 32));
 
         for i in 1..l_chunk.len() {
             let shift = FpVar::new_constant(cs.clone(), shift_const)?;
@@ -96,7 +124,7 @@ pub fn chunk_ee_zero<F: arkPrimeField>(
     }
     Ok(())
 }
-*/
+
 pub fn mle_eval<F: PrimeField>(table: &[F], x: &[F]) -> F {
     let chis = evals(x);
     assert_eq!(chis.len(), table.len());

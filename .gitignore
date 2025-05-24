@@ -2,4 +2,5 @@
 .DS_Store
 Cargo.lock
 *.ptau
+Cargo.toml
 TODO
