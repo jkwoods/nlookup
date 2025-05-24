@@ -595,7 +595,7 @@ pub struct RunningMem<F: arkPrimeField> {
     pub_fs: Vec<MemElem<F>>,
     pub_hashes: (F, F),
     ts: F,
-    perm_chal: F,
+    pub perm_chal: F,
     pub elem_len: usize,
     pub scan_per_batch: usize,
     s: usize, // iter through scan
