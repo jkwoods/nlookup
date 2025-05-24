@@ -562,7 +562,7 @@ impl<F: arkPrimeField> MemBuilder<F> {
             mem_wits,
             priv_fs: priv_fs.to_vec(),
             pub_fs: pub_fs.to_vec(),
-            pub_hashes: (F::zero(), F::zero()),
+            pub_hashes: (F::one(), F::one()),
             ts: F::zero(),
             perm_chal,
             elem_len: self.elem_len,
@@ -625,6 +625,7 @@ pub struct RunningMemWires<F: arkPrimeField> {
 impl<F: arkPrimeField> RunningMem<F> {
     pub fn get_dummy(&self) -> Self {
         let mut mem_wits = HashMap::new();
+        mem_wits.insert(self.padding.addr, self.padding.clone());
         /*self.mem_wits.clone();
         for (_, elem) in mem_wits.iter_mut() {
             *elem = self.padding.clone();
@@ -928,9 +929,10 @@ impl<F: arkPrimeField> RunningMem<F> {
         let read_wit = if self.dummy_mode {
             &self.padding
         } else {
-            self.mem_wits.get(&addr.value()?).unwrap()
+            let rw = self.mem_wits.get(&addr.value()?).unwrap();
+            assert_eq!(rw.addr, addr.value()?);
+            rw
         };
-        assert_eq!(read_wit.addr, addr.value()?);
 
         let read_mem_elem = MemElemWires::new(
             FpVar::new_witness(w.cs.clone(), || Ok(read_wit.time))?,
