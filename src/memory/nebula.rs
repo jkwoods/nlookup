@@ -52,10 +52,10 @@ impl<F: arkPrimeField> MemElem<F> {
         }
     }
 
-    pub fn padding(elem_len: usize) -> Self {
+    pub fn padding(elem_len: usize, addr: usize) -> Self {
         MemElem {
             time: F::zero(),
-            addr: F::zero(),
+            addr: F::from(addr as u64),
             vals: vec![F::zero(); elem_len],
             sr: F::zero(),
         }
@@ -205,8 +205,8 @@ impl<F: arkPrimeField> MemBuilder<F> {
         mb
     }
 
-    fn padding(&self) -> MemElem<F> {
-        MemElem::padding(self.elem_len)
+    fn padding(&self, addr: usize) -> MemElem<F> {
+        MemElem::padding(self.elem_len, addr)
     }
 
     pub fn push(&mut self, stack_tag: usize, vals: Vec<F>) {
@@ -250,7 +250,7 @@ impl<F: arkPrimeField> MemBuilder<F> {
 
     fn inner_cond_read(&mut self, cond: bool, addr: usize, mem_tag: usize) -> Vec<F> {
         let read_elem = if !cond {
-            self.padding()
+            self.padding(addr)
         } else if self.mem.contains_key(&addr) {
             let re = self.mem.get(&addr).unwrap().clone();
             assert_eq!(re.addr, F::from(addr as u64));
@@ -266,7 +266,7 @@ impl<F: arkPrimeField> MemBuilder<F> {
         }
 
         let write_elem = if !cond {
-            self.padding()
+            self.padding(addr)
         } else {
             let we = MemElem::new_f(
                 F::from(self.ts as u64),
@@ -327,7 +327,7 @@ impl<F: arkPrimeField> MemBuilder<F> {
         assert_eq!(vals.len(), self.elem_len, "Element not correct length");
 
         let read_elem = if !cond {
-            &self.padding()
+            &self.padding(addr)
         } else if self.mem.contains_key(&addr) {
             let re = self.mem.get(&addr).unwrap();
             assert_eq!(re.addr, F::from(addr as u64));
@@ -343,7 +343,7 @@ impl<F: arkPrimeField> MemBuilder<F> {
         }
 
         let write_elem = if !cond {
-            self.padding()
+            self.padding(addr)
         } else {
             let we = MemElem::new_f(
                 F::from(self.ts as u64),
@@ -1030,7 +1030,12 @@ impl<F: arkPrimeField> RunningMem<F> {
 
         // RS = RS * tup
         let read_wit = if self.dummy_mode || !cond.value()? {
-            &self.padding
+            &MemElem {
+                time: F::zero(),
+                addr: addr.value()?,
+                vals: vec![F::zero(); self.elem_len],
+                sr: F::zero(),
+            }
         } else {
             let rw = self.mem_wits.get(&addr.value()?).unwrap();
             assert_eq!(rw.addr, addr.value()?);
@@ -1824,10 +1829,10 @@ mod tests {
         mb.cond_write(true, 2, vec![A::from(18), A::from(19)], MemType::PrivRAM(0));
 
         // TODO
-        mb.cond_read(false, 1, MemType::PrivRAM(0));
+        mb.cond_read(false, 0, MemType::PrivRAM(0));
         mb.cond_write(
             false,
-            2,
+            0,
             vec![A::from(18), A::from(19)],
             MemType::PrivRAM(0),
         );
