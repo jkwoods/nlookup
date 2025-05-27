@@ -52,6 +52,15 @@ impl<F: arkPrimeField> MemElem<F> {
         }
     }
 
+    pub fn padding(elem_len: usize) -> Self {
+        MemElem {
+            time: F::zero(),
+            addr: F::zero(),
+            vals: vec![F::zero(); elem_len],
+            sr: F::zero(),
+        }
+    }
+
     pub fn get_vec(&self) -> Vec<F> {
         let mut v = vec![self.time, self.addr, self.sr];
         v.extend(self.vals.clone());
@@ -128,7 +137,7 @@ impl<F: arkPrimeField> MemElemWires<F> {
 
 #[derive(Clone, Eq, Debug, PartialEq, PartialOrd, Ord)]
 pub enum MemType {
-    PrivStack(usize), // 0
+    PrivStack(usize),
     PrivROM(usize),
     PrivRAM(usize),
     PubROM(usize),
@@ -179,7 +188,7 @@ impl<F: arkPrimeField> MemBuilder<F> {
             }
         }
 
-        Self {
+        let mb = Self {
             mem: HashMap::new(),
             pub_is: Vec::new(),
             priv_is: Vec::new(),
@@ -191,7 +200,13 @@ impl<F: arkPrimeField> MemBuilder<F> {
             stack_ptrs,
             elem_len,
             ts: 0,
-        }
+        };
+
+        mb
+    }
+
+    fn padding(&self) -> MemElem<F> {
+        MemElem::padding(self.elem_len)
     }
 
     pub fn push(&mut self, stack_tag: usize, vals: Vec<F>) {
@@ -234,12 +249,15 @@ impl<F: arkPrimeField> MemBuilder<F> {
     }
 
     fn inner_cond_read(&mut self, cond: bool, addr: usize, mem_tag: usize) -> Vec<F> {
-        let read_elem = if self.mem.contains_key(&addr) {
-            self.mem.get(&addr).unwrap().clone()
+        let read_elem = if !cond {
+            self.padding()
+        } else if self.mem.contains_key(&addr) {
+            let re = self.mem.get(&addr).unwrap().clone();
+            assert_eq!(re.addr, F::from(addr as u64));
+            re
         } else {
             panic!("Uninitialized memory addr")
         };
-        assert_eq!(read_elem.addr, F::from(addr as u64));
         self.rs.push(read_elem.clone());
 
         if cond {
@@ -247,15 +265,20 @@ impl<F: arkPrimeField> MemBuilder<F> {
             assert!((self.ts as u64) < (1_u64 << 32));
         }
 
-        let write_elem = MemElem::new_f(
-            F::from(self.ts as u64),
-            F::from(addr as u64),
-            read_elem.vals.clone(),
-            F::from(mem_tag as u64),
-        );
-        if cond {
-            self.mem.insert(addr, write_elem.clone());
-        }
+        let write_elem = if !cond {
+            self.padding()
+        } else {
+            let we = MemElem::new_f(
+                F::from(self.ts as u64),
+                F::from(addr as u64),
+                read_elem.vals.clone(),
+                F::from(mem_tag as u64),
+            );
+
+            self.mem.insert(addr, we.clone());
+            we
+        };
+
         self.ws.push(write_elem.clone());
 
         if cond {
@@ -303,12 +326,15 @@ impl<F: arkPrimeField> MemBuilder<F> {
     fn inner_cond_write(&mut self, cond: bool, addr: usize, vals: Vec<F>, mem_type: usize) {
         assert_eq!(vals.len(), self.elem_len, "Element not correct length");
 
-        let read_elem = if self.mem.contains_key(&addr) {
-            self.mem.get(&addr).unwrap()
+        let read_elem = if !cond {
+            &self.padding()
+        } else if self.mem.contains_key(&addr) {
+            let re = self.mem.get(&addr).unwrap();
+            assert_eq!(re.addr, F::from(addr as u64));
+            re
         } else {
             panic!("Uninitialized memory addr")
         };
-        assert_eq!(read_elem.addr, F::from(addr as u64));
 
         self.rs.push(read_elem.clone());
         if cond {
@@ -316,15 +342,21 @@ impl<F: arkPrimeField> MemBuilder<F> {
             assert!((self.ts as u64) < (1_u64 << 32));
         }
 
-        let write_elem = MemElem::new_f(
-            F::from(self.ts as u64),
-            read_elem.addr,
-            vals,
-            F::from(mem_type as u64),
-        );
-        if cond {
-            self.mem.insert(addr, write_elem.clone());
-        }
+        let write_elem = if !cond {
+            self.padding()
+        } else {
+            let we = MemElem::new_f(
+                F::from(self.ts as u64),
+                read_elem.addr,
+                vals,
+                F::from(mem_type as u64),
+            );
+
+            self.mem.insert(addr, we.clone());
+
+            we
+        };
+
         self.ws.push(write_elem.clone());
 
         if cond {
@@ -556,7 +588,7 @@ impl<F: arkPrimeField> MemBuilder<F> {
             priv_fs,
             &padding,
         );
-        //println!("RAM HINTS {:#?}", ram_hints);
+        println!("RAM HINTS {:#?}", ram_hints);
 
         let perm_chal = nova_to_ark_field::<N1, F>(&sample_challenge(&ic_cmt));
 
@@ -982,7 +1014,7 @@ impl<F: arkPrimeField> RunningMem<F> {
             Ok(if cond.value()? {
                 w.ts_m1.value()? + F::one()
             } else {
-                w.ts_m1.value()?
+                F::zero() //w.ts_m1.value()?
             })
         })?;
         //ts.conditional_enforce_equal(&(&w.ts_m1 + &FpVar::one()), &cond)?;
@@ -997,7 +1029,7 @@ impl<F: arkPrimeField> RunningMem<F> {
         // t < ts hacked in other part of code
 
         // RS = RS * tup
-        let read_wit = if self.dummy_mode {
+        let read_wit = if self.dummy_mode || !cond.value()? {
             &self.padding
         } else {
             let rw = self.mem_wits.get(&addr.value()?).unwrap();
@@ -1253,7 +1285,7 @@ mod tests {
         assert!(res.is_ok());
         let (mut next_mem_ops, f, last_check) = res.unwrap();
 
-        /*println!("INIT");
+        println!("INIT");
         for mo in &next_mem_ops {
             mo.print_vals();
         }
@@ -1264,7 +1296,7 @@ mod tests {
         println!("FINAL");
         for mo in &f {
             mo.print_vals();
-        }*/
+        }
 
         next_mem_ops.extend(rw_mem_ops);
         next_mem_ops.extend(f);
@@ -1487,7 +1519,7 @@ mod tests {
                     &mut running_ws,
                     &mut running_fs,
                     &mut stack_ptrs,
-                    (i == num_iters - 2),
+                    i == num_iters - 2,
                 );
             }
         }
@@ -1818,7 +1850,7 @@ mod tests {
         let (cond_value, read_addr, write_addr, write_vals) = if i == 0 {
             (true, 1, 2, vec![18, 19])
         } else if i == 1 {
-            (false, 1, 2, vec![18, 19])
+            (false, 0, 0, vec![0, 0]) //(false, 1, 2, vec![18, 19])
         } else if i == 2 {
             (true, 3, 4, vec![20, 21])
         } else {

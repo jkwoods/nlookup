@@ -34,7 +34,7 @@ pub fn chunk_cee<F: arkPrimeField>(
     let l_chunks = l_vals.chunks(7).map(|c| c.to_vec()).collect::<Vec<_>>();
     let r_chunks = r_vals.chunks(7).map(|c| c.to_vec()).collect::<Vec<_>>();
 
-    let mut shift_const = F::from((1_u64 << 32));
+    let mut shift_const = F::from(1_u64 << 32);
 
     for (l_chunk, r_chunk) in l_chunks.iter().zip(r_chunks.iter()) {
         let mut l_pack = l_chunk[0].clone();
@@ -62,7 +62,7 @@ pub fn chunk_ee<F: arkPrimeField>(
     let l_chunks = l_vals.chunks(7).map(|c| c.to_vec()).collect::<Vec<_>>();
     let r_chunks = r_vals.chunks(7).map(|c| c.to_vec()).collect::<Vec<_>>();
 
-    let mut shift_const = F::from((1_u64 << 32));
+    let mut shift_const = F::from(1_u64 << 32);
 
     for (l_chunk, r_chunk) in l_chunks.iter().zip(r_chunks.iter()) {
         let mut l_pack = l_chunk[0].clone();
@@ -91,7 +91,7 @@ pub fn chunk_cee_zero<F: arkPrimeField>(
     for l_chunk in l_chunks.iter() {
         let mut l_pack = l_chunk[0].clone();
 
-        let mut shift_const = F::from((1_u64 << 32));
+        let mut shift_const = F::from(1_u64 << 32);
 
         for i in 1..l_chunk.len() {
             let shift = FpVar::new_constant(cs.clone(), shift_const)?;
@@ -113,7 +113,7 @@ pub fn chunk_ee_zero<F: arkPrimeField>(
     for l_chunk in l_chunks.iter() {
         let mut l_pack = l_chunk[0].clone();
 
-        let mut shift_const = F::from((1_u64 << 32));
+        let mut shift_const = F::from(1_u64 << 32);
 
         for i in 1..l_chunk.len() {
             let shift = FpVar::new_constant(cs.clone(), shift_const)?;
