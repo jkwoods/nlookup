@@ -13,14 +13,16 @@ use ark_relations::{
     lc, ns,
 };
 use ark_std::test_rng;
+use itertools::multiunzip;
 use nova_snark::{
     gadgets::utils::scalar_as_base,
-    provider::incremental::Incremental,
+    provider::{hyperkzg::Commitment, incremental::Incremental},
     traits::{
         commitment::{CommitmentEngineTrait, Len},
         Engine, ROConstants, ROTrait,
     },
 };
+use rayon::prelude::*;
 use std::collections::HashMap;
 
 type CommitmentKey<E> = <<E as Engine>::CE as CommitmentEngineTrait<E>>::CommitmentKey;
@@ -392,118 +394,148 @@ impl<F: arkPrimeField> MemBuilder<F> {
         let num_cmts = if sep_final { 3 } else { 1 };
 
         let mut ci: Vec<Option<N2>> = vec![None; num_cmts];
-        let mut blinds: Vec<Vec<N1>> = vec![Vec::new(); num_iters];
-        let mut ram_hints = Vec::new();
+        // let mut inner_commits: Vec<Vec<Option<Commitment<E1>>>> =
+        //    vec![vec![None; num_iters]; num_cmts];
+        //let mut blinds: Vec<Vec<N1>> = vec![vec![N1::zero(); num_cmts]; num_iters];
+        //let mut ram_hints = vec![Vec::new(); num_iters];
 
-        for i in 0..num_iters {
-            let mut is_hint = Vec::new();
-            let mut rs_ws_hint = Vec::new();
-            let mut fs_hint = Vec::new();
+        let zipped: Vec<(Vec<Commitment<E1>>, Vec<N1>, Vec<N1>)> = (0..num_iters)
+            .into_par_iter()
+            .map(|i| {
+                let mut is_hint = Vec::new();
+                let mut rs_ws_hint = Vec::new();
+                let mut fs_hint = Vec::new();
 
-            let is_slice = if (i * scan_batch_size + scan_batch_size) <= self.priv_is.len() {
-                self.priv_is[(i * scan_batch_size)..(i * scan_batch_size + scan_batch_size)]
-                    .to_vec()
-            } else {
-                if (i * scan_batch_size) <= self.priv_is.len() {
-                    let mut is_slice = self.priv_is[(i * scan_batch_size)..].to_vec();
-                    is_slice.extend(vec![padding.clone(); scan_batch_size - is_slice.len()]);
-
-                    is_slice
+                let is_slice = if (i * scan_batch_size + scan_batch_size) <= self.priv_is.len() {
+                    self.priv_is[(i * scan_batch_size)..(i * scan_batch_size + scan_batch_size)]
+                        .to_vec()
                 } else {
-                    vec![padding.clone(); scan_batch_size]
-                }
-            };
+                    if (i * scan_batch_size) <= self.priv_is.len() {
+                        let mut is_slice = self.priv_is[(i * scan_batch_size)..].to_vec();
+                        is_slice.extend(vec![padding.clone(); scan_batch_size - is_slice.len()]);
 
-            let fs_slice = if (i * scan_batch_size + scan_batch_size) <= priv_fs.len() {
-                (priv_fs[(i * scan_batch_size)..(i * scan_batch_size + scan_batch_size)].to_vec())
-            } else {
-                if (i * scan_batch_size) <= priv_fs.len() {
-                    let mut fs_slice = priv_fs[(i * scan_batch_size)..].to_vec();
-                    fs_slice.extend(vec![padding.clone(); scan_batch_size - fs_slice.len()]);
-
-                    fs_slice
-                } else {
-                    (vec![padding.clone(); scan_batch_size])
-                }
-            };
-
-            for im in is_slice {
-                let nova_im: Vec<N1> = im
-                    .get_vec()
-                    .iter()
-                    .map(|a| ark_to_nova_field::<F, N1>(a))
-                    .collect();
-                is_hint.extend(nova_im);
-            }
-
-            for fm in fs_slice.iter() {
-                let nova_fm: Vec<N1> = fm
-                    .get_vec()
-                    .iter()
-                    .map(|a| ark_to_nova_field::<F, N1>(a))
-                    .collect();
-
-                fs_hint.extend(nova_fm);
-            }
-
-            for (rm, wm) in self.rs[(i * rw_batch_size)..(i * rw_batch_size + rw_batch_size)]
-                .iter()
-                .zip(self.ws[(i * rw_batch_size)..(i * rw_batch_size + rw_batch_size)].iter())
-            {
-                let nova_rm: Vec<N1> = rm
-                    .get_vec()
-                    .iter()
-                    .map(|a| ark_to_nova_field::<F, N1>(a))
-                    .collect();
-                let nova_wm: Vec<N1> = wm
-                    .get_vec()
-                    .iter()
-                    .map(|a| ark_to_nova_field::<F, N1>(a))
-                    .collect();
-
-                rs_ws_hint.extend(nova_rm);
-                rs_ws_hint.extend(nova_wm);
-            }
-
-            let mut ordered_hints: Vec<_> = is_hint;
-            ordered_hints.extend(rs_ws_hint);
-            ordered_hints.extend(fs_hint);
-
-            let isb = scan_batch_size * (3 + self.elem_len);
-            let fsb = scan_batch_size * (3 + self.elem_len);
-            let rwb = rw_batch_size * (3 + self.elem_len);
-
-            let hint_ranges = if sep_final {
-                vec![
-                    0..isb,
-                    isb..(isb + rwb * 2),
-                    (isb + rwb * 2)..(isb + fsb + rwb * 2),
-                ]
-            } else {
-                vec![0..(isb + fsb + rwb * 2)]
-            };
-            //println!("HINT RANGES {:#?}", hint_ranges);
-
-            let mut cmt_wits = vec![Vec::new(); num_cmts];
-
-            for k in 0..num_cmts {
-                for (j, range) in hint_ranges.iter().enumerate() {
-                    if j == k {
-                        cmt_wits[k].extend(&ordered_hints[range.clone()]);
+                        is_slice
                     } else {
-                        cmt_wits[k].extend(vec![N1::zero(); range.len()]);
+                        vec![padding.clone(); scan_batch_size]
+                    }
+                };
+
+                let fs_slice = if (i * scan_batch_size + scan_batch_size) <= priv_fs.len() {
+                    (priv_fs[(i * scan_batch_size)..(i * scan_batch_size + scan_batch_size)]
+                        .to_vec())
+                } else {
+                    if (i * scan_batch_size) <= priv_fs.len() {
+                        let mut fs_slice = priv_fs[(i * scan_batch_size)..].to_vec();
+                        fs_slice.extend(vec![padding.clone(); scan_batch_size - fs_slice.len()]);
+
+                        fs_slice
+                    } else {
+                        (vec![padding.clone(); scan_batch_size])
+                    }
+                };
+
+                for im in is_slice {
+                    let nova_im: Vec<N1> = im
+                        .get_vec()
+                        .iter()
+                        .map(|a| ark_to_nova_field::<F, N1>(a))
+                        .collect();
+                    is_hint.extend(nova_im);
+                }
+
+                for fm in fs_slice.iter() {
+                    let nova_fm: Vec<N1> = fm
+                        .get_vec()
+                        .iter()
+                        .map(|a| ark_to_nova_field::<F, N1>(a))
+                        .collect();
+
+                    fs_hint.extend(nova_fm);
+                }
+
+                for (rm, wm) in self.rs[(i * rw_batch_size)..(i * rw_batch_size + rw_batch_size)]
+                    .iter()
+                    .zip(self.ws[(i * rw_batch_size)..(i * rw_batch_size + rw_batch_size)].iter())
+                {
+                    let nova_rm: Vec<N1> = rm
+                        .get_vec()
+                        .iter()
+                        .map(|a| ark_to_nova_field::<F, N1>(a))
+                        .collect();
+                    let nova_wm: Vec<N1> = wm
+                        .get_vec()
+                        .iter()
+                        .map(|a| ark_to_nova_field::<F, N1>(a))
+                        .collect();
+
+                    rs_ws_hint.extend(nova_rm);
+                    rs_ws_hint.extend(nova_wm);
+                }
+
+                let mut ordered_hints: Vec<_> = is_hint;
+                ordered_hints.extend(rs_ws_hint);
+                ordered_hints.extend(fs_hint);
+
+                let isb = scan_batch_size * (3 + self.elem_len);
+                let fsb = scan_batch_size * (3 + self.elem_len);
+                let rwb = rw_batch_size * (3 + self.elem_len);
+
+                let hint_ranges = if sep_final {
+                    vec![
+                        0..isb,
+                        isb..(isb + rwb * 2),
+                        (isb + rwb * 2)..(isb + fsb + rwb * 2),
+                    ]
+                } else {
+                    vec![0..(isb + fsb + rwb * 2)]
+                };
+                //println!("HINT RANGES {:#?}", hint_ranges);
+
+                let mut cmt_wits = vec![Vec::new(); num_cmts];
+
+                for k in 0..num_cmts {
+                    for (j, range) in hint_ranges.iter().enumerate() {
+                        if j == k {
+                            cmt_wits[k].extend(&ordered_hints[range.clone()]);
+                        } else {
+                            cmt_wits[k].extend(vec![N1::zero(); range.len()]);
+                        }
                     }
                 }
-            }
 
+                let mut blinds_i = Vec::new();
+                let mut inner_commits_i = Vec::new();
+                for j in 0..num_cmts {
+                    let (inner, blind) = ic_gen.inner_commit(&cmt_wits[j]);
+
+                    //inner_commits[i][j] = Some(inner);
+                    inner_commits_i.push(inner);
+                    //blinds[i][j] = blind;
+                    blinds_i.push(blind);
+                }
+
+                //ram_hints[i] = ordered_hints;
+                (inner_commits_i, blinds_i, ordered_hints)
+            })
+            .collect();
+
+        let (inner_commits, blinds, ram_hints): (
+            Vec<Vec<Commitment<E1>>>,
+            Vec<Vec<N1>>,
+            Vec<Vec<N1>>,
+        ) = multiunzip(zipped);
+
+        // let mut inner_commits: Vec<Vec<Option<Commitment<E1>>>> =
+        //    vec![vec![None; num_iters]; num_cmts];
+        //let mut blinds: Vec<Vec<N1>> = vec![vec![N1::zero(); num_cmts]; num_iters];
+        //let mut ram_hints = vec![Vec::new(); num_iters];
+
+        for i in 0..num_iters {
             for j in 0..num_cmts {
                 //println!("cmt wits {:#?}", cmt_wits[j]);
-                let (hash, blind) = ic_gen.commit(ci[j], &cmt_wits[j]);
+                let hash = ic_gen.hash(ci[j], &inner_commits[i][j]);
                 ci[j] = Some(hash);
-
-                blinds[i].push(blind);
             }
-            ram_hints.push(ordered_hints);
         }
 
         let final_cmts = ci.iter().map(|c| c.unwrap()).collect();
