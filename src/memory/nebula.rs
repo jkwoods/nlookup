@@ -1232,7 +1232,7 @@ mod tests {
     use ff::Field as novaField;
     use ff::PrimeField as novaPrimeField;
     use nova_snark::{
-        nova::{CompressedSNARK, PublicParams, RecursiveSNARK},
+        nova::{CompressedSNARK, PublicParams, RandomLayer, RecursiveSNARK},
         traits::{circuit::TrivialCircuit, snark::default_ck_hint, Engine},
     };
 
@@ -1534,7 +1534,8 @@ mod tests {
         let (pk, vk) = CompressedSNARK::<_, _, _, S1, S2>::setup(&pp).unwrap();
 
         // produce a compressed SNARK
-        let random_layer = CompressedSNARK::<_, _, _, S1, S2>::sample_random_layer(&pp).unwrap();
+        let random_layer: RandomLayer<E1, E2> =
+            CompressedSNARK::<_, _, _, S1, S2>::sample_random_layer(&pp).unwrap();
         let res =
             CompressedSNARK::<_, _, _, S1, S2>::prove(&pp, &pk, &recursive_snark, random_layer);
         assert!(res.is_ok());
