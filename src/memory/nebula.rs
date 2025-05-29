@@ -1534,7 +1534,9 @@ mod tests {
         let (pk, vk) = CompressedSNARK::<_, _, _, S1, S2>::setup(&pp).unwrap();
 
         // produce a compressed SNARK
-        let res = CompressedSNARK::<_, _, _, S1, S2>::prove(&pp, &pk, &recursive_snark);
+        let random_layer = CompressedSNARK::<_, _, _, S1, S2>::sample_random_layer(&pp).unwrap();
+        let res =
+            CompressedSNARK::<_, _, _, S1, S2>::prove(&pp, &pk, &recursive_snark, random_layer);
         assert!(res.is_ok());
         let compressed_snark = res.unwrap();
 
