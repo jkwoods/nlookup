@@ -871,10 +871,7 @@ impl<F: arkPrimeField> RunningMem<F> {
 
         // boundry check
         w.stack_ptrs[stack_tag].conditional_enforce_not_equal(
-            &FpVar::new_constant(
-                w.cs.clone(),
-                F::from((self.stack_spaces[stack_tag + 1] + 1) as u64),
-            )?,
+            &FpVar::constant(F::from((self.stack_spaces[stack_tag + 1] + 1) as u64)),
             cond,
         )?;
 
@@ -1269,7 +1266,7 @@ impl<F: arkPrimeField> RunningMem<F> {
         w.running_fs = last_check.select(&FpVar::constant(F::zero()), &w.running_fs)?;
 
         // packed
-        chunk_ee_zero(&eez_pack, &FpVar::constant(F::zero()), w.cs.clone())?;
+        chunk_ee_zero(&eez_pack, w.cs.clone())?;
         chunk_ee(&ee_addr_pack_l, &ee_addr_pack_r, w.cs.clone())?;
 
         Ok((is_elems, fs_elems, last_check))

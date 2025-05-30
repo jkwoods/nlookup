@@ -1,8 +1,9 @@
+use std::any::TypeId;
+
 use ark_crypto_primitives::sponge::poseidon::{find_poseidon_ark_and_mds, PoseidonConfig};
 use ark_ff::{BigInteger256, PrimeField};
 use ark_r1cs_std::{
     alloc::AllocVar, boolean::Boolean, eq::EqGadget, fields::fp::FpVar, fields::FieldVar,
-    prelude::AllocationMode, GR1CSVar,
 };
 use ark_relations::gr1cs::{ConstraintSystemRef, SynthesisError};
 use nova_snark::traits::Engine;
@@ -22,30 +23,41 @@ pub fn logmn(mn: usize) -> usize {
     }
 }
 
+type ShiftPowers<F> = [FpVar<F>; 7];
+
+fn get_shift_powers<F: PrimeField>(
+    cs: &ConstraintSystemRef<F>,
+) -> Box<ShiftPowers<F>> {
+    let cs = cs.borrow().unwrap();
+    let mut map = cs.cache_map.borrow_mut();
+    let shift_powers = map.entry(TypeId::of::<ShiftPowers<F>>()).or_insert_with(|| {
+        let mut shift_powers = [(); 7].map(|_| FpVar::one());
+        let mut power = FpVar::constant(F::from(u32::MAX));
+        for p in &mut shift_powers[1..] {
+            *p = power.clone();
+            power.square_in_place().unwrap();
+        }
+        Box::new(shift_powers)
+    });
+    shift_powers
+        .downcast_mut::<Box<ShiftPowers<F>>>()
+        .expect("Failed to downcast ShiftPowers")
+        .clone()
+}
+
 // from eli
 pub fn chunk_cee<F: arkPrimeField>(
     cond: &Boolean<F>,
-    l_vals: &Vec<FpVar<F>>,
-    r_vals: &Vec<FpVar<F>>,
+    l_vals: &[FpVar<F>],
+    r_vals: &[FpVar<F>],
     cs: ConstraintSystemRef<F>,
 ) -> Result<(), SynthesisError> {
+    let shift_powers = get_shift_powers::<F>(&cs);
     assert_eq!(l_vals.len(), r_vals.len());
-
-    let l_chunks = l_vals.chunks(7).map(|c| c.to_vec()).collect::<Vec<_>>();
-    let r_chunks = r_vals.chunks(7).map(|c| c.to_vec()).collect::<Vec<_>>();
-
-    let mut shift_const = F::from(1_u64 << 32);
-
-    for (l_chunk, r_chunk) in l_chunks.iter().zip(r_chunks.iter()) {
-        let mut l_pack = l_chunk[0].clone();
-        let mut r_pack = r_chunk[0].clone();
-
-        for i in 1..l_chunk.len() {
-            let shift = FpVar::new_constant(cs.clone(), shift_const)?;
-            l_pack = l_pack + (&l_chunk[i] * shift.clone());
-            r_pack = r_pack + (&r_chunk[i] * shift.clone());
-            shift_const = shift_const.square();
-        }
+    for (l_chunk, r_chunk) in l_vals.chunks(7).zip(r_vals.chunks(7)) {
+        let shift_powers = &shift_powers[..l_chunk.len()];
+        let l_pack = FpVar::inner_product(l_chunk, &shift_powers)?;
+        let r_pack = FpVar::inner_product(r_chunk, &shift_powers)?;
         l_pack.conditional_enforce_equal(&r_pack, cond)?;
     }
 
@@ -58,69 +70,39 @@ pub fn chunk_ee<F: arkPrimeField>(
     cs: ConstraintSystemRef<F>,
 ) -> Result<(), SynthesisError> {
     assert_eq!(l_vals.len(), r_vals.len());
-
-    let l_chunks = l_vals.chunks(7).map(|c| c.to_vec()).collect::<Vec<_>>();
-    let r_chunks = r_vals.chunks(7).map(|c| c.to_vec()).collect::<Vec<_>>();
-
-    let mut shift_const = F::from(1_u64 << 32);
-
-    for (l_chunk, r_chunk) in l_chunks.iter().zip(r_chunks.iter()) {
-        let mut l_pack = l_chunk[0].clone();
-        let mut r_pack = r_chunk[0].clone();
-
-        for i in 1..l_chunk.len() {
-            let shift = FpVar::new_constant(cs.clone(), shift_const)?;
-            l_pack = l_pack + (&l_chunk[i] * shift.clone());
-            r_pack = r_pack + (&r_chunk[i] * shift.clone());
-            shift_const = shift_const.square();
-        }
+    let shift_powers = get_shift_powers::<F>(&cs);
+    for (l_chunk, r_chunk) in l_vals.chunks(7).zip(r_vals.chunks(7)) {
+        let shift_powers = &shift_powers[..l_chunk.len()];
+        let l_pack = FpVar::inner_product(l_chunk, &shift_powers)?;
+        let r_pack = FpVar::inner_product(r_chunk, &shift_powers)?;
         l_pack.enforce_equal(&r_pack)?;
     }
-
     Ok(())
 }
 
 pub fn chunk_cee_zero<F: arkPrimeField>(
     cond: &Boolean<F>,
     l_vals: &Vec<FpVar<F>>,
-    zero: &FpVar<F>,
     cs: ConstraintSystemRef<F>,
 ) -> Result<(), SynthesisError> {
-    let l_chunks = l_vals.chunks(7).map(|c| c.to_vec()).collect::<Vec<_>>();
-
-    for l_chunk in l_chunks.iter() {
-        let mut l_pack = l_chunk[0].clone();
-
-        let mut shift_const = F::from(1_u64 << 32);
-
-        for i in 1..l_chunk.len() {
-            let shift = FpVar::new_constant(cs.clone(), shift_const)?;
-            l_pack = l_pack + (&l_chunk[i] * shift.clone());
-            shift_const = shift_const.square();
-        }
-        l_pack.conditional_enforce_equal(&zero, cond)?;
+    let shift_powers = get_shift_powers::<F>(&cs);
+    for l_chunk in l_vals.chunks(7) {
+        let shift_powers = &shift_powers[..l_chunk.len()];
+        let l_pack = FpVar::inner_product(l_chunk, &shift_powers)?;
+        l_pack.conditional_enforce_equal(&FpVar::zero(), cond)?;
     }
     Ok(())
 }
 
 pub fn chunk_ee_zero<F: arkPrimeField>(
     l_vals: &Vec<FpVar<F>>,
-    zero: &FpVar<F>,
     cs: ConstraintSystemRef<F>,
 ) -> Result<(), SynthesisError> {
-    let l_chunks = l_vals.chunks(7).map(|c| c.to_vec()).collect::<Vec<_>>();
-
-    for l_chunk in l_chunks.iter() {
-        let mut l_pack = l_chunk[0].clone();
-
-        let mut shift_const = F::from(1_u64 << 32);
-
-        for i in 1..l_chunk.len() {
-            let shift = FpVar::new_constant(cs.clone(), shift_const)?;
-            l_pack = l_pack + (&l_chunk[i] * shift.clone());
-            shift_const = shift_const.square();
-        }
-        l_pack.enforce_equal(&zero)?;
+    let shift_powers = get_shift_powers::<F>(&cs);
+    for l_chunk in l_vals.chunks(7) {
+        let shift_powers = &shift_powers[..l_chunk.len()];
+        let l_pack = FpVar::inner_product(l_chunk, &shift_powers)?;
+        l_pack.enforce_equal(&FpVar::zero())?;
     }
     Ok(())
 }
