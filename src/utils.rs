@@ -1,4 +1,4 @@
-use std::any::TypeId;
+use std::{any::TypeId, ops::DerefMut};
 
 use ark_crypto_primitives::sponge::poseidon::{find_poseidon_ark_and_mds, PoseidonConfig};
 use ark_ff::{BigInteger256, PrimeField};
@@ -27,20 +27,21 @@ type ShiftPowers<F> = [FpVar<F>; 7];
 
 fn get_shift_powers<F: PrimeField>(
     cs: &ConstraintSystemRef<F>,
-) -> Box<ShiftPowers<F>> {
+) -> ShiftPowers<F> {
     let cs = cs.borrow().unwrap();
     let mut map = cs.cache_map.borrow_mut();
     let shift_powers = map.entry(TypeId::of::<ShiftPowers<F>>()).or_insert_with(|| {
         let mut shift_powers = [(); 7].map(|_| FpVar::one());
-        let mut power = FpVar::constant(F::from(u32::MAX));
+        let mut power = FpVar::constant(F::from(1u64 << 32));
         for p in &mut shift_powers[1..] {
             *p = power.clone();
-            power.square_in_place().unwrap();
+            power.square_in_place();
         }
         Box::new(shift_powers)
     });
     shift_powers
-        .downcast_mut::<Box<ShiftPowers<F>>>()
+        .deref_mut()
+        .downcast_mut::<ShiftPowers<F>>()
         .expect("Failed to downcast ShiftPowers")
         .clone()
 }
