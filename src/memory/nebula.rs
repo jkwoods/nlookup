@@ -23,7 +23,7 @@ use nova_snark::{
     },
 };
 use rayon::prelude::*;
-use std::collections::HashMap;
+use rustc_hash::{FxHashMap as HashMap};
 
 type CommitmentKey<E> = <<E as Engine>::CE as CommitmentEngineTrait<E>>::CommitmentKey;
 
@@ -191,12 +191,12 @@ impl<F: arkPrimeField> MemBuilder<F> {
         }
 
         let mb = Self {
-            mem: HashMap::new(),
+            mem: new_hash_map(),
             pub_is: Vec::new(),
             priv_is: Vec::new(),
             rs: Vec::new(),
             ws: Vec::new(),
-            fs: HashMap::new(),
+            fs: new_hash_map(),
             mem_spaces,
             stack_spaces,
             stack_ptrs,
@@ -592,7 +592,7 @@ impl<F: arkPrimeField> MemBuilder<F> {
             self.priv_is.len() + self.pub_is.len()
         );
 
-        let mut mem_wits = HashMap::new();
+        let mut mem_wits = new_hash_map();
         for elem in &self.pub_is {
             mem_wits.insert(elem.addr, elem.clone());
         }
@@ -692,7 +692,7 @@ pub struct RunningMemWires<F: arkPrimeField> {
 
 impl<F: arkPrimeField> RunningMem<F> {
     pub fn get_dummy(&self) -> Self {
-        let mut mem_wits = HashMap::new();
+        let mut mem_wits = new_hash_map();
         mem_wits.insert(self.padding.addr, self.padding.clone());
         /*self.mem_wits.clone();
         for (_, elem) in mem_wits.iter_mut() {
@@ -721,15 +721,8 @@ impl<F: arkPrimeField> RunningMem<F> {
 
     // can be called by prove on real RunningMem or by Verifier on dummy to produce same result
     pub fn get_pub_is_fs_hashes(&self) -> (F, F) {
-        let mut pub_is = F::one();
-        for elem in &self.pub_is {
-            pub_is *= elem.hash(self.perm_chal);
-        }
-
-        let mut pub_fs = F::one();
-        for elem in &self.pub_fs {
-            pub_fs *= elem.hash(self.perm_chal);
-        }
+        let pub_is = self.pub_is.par_iter().map(|e| e.hash(self.perm_chal)).product::<F>();
+        let pub_fs = self.pub_fs.par_iter().map(|e| e.hash(self.perm_chal)).product::<F>();
 
         (pub_is, pub_fs)
     }
@@ -957,14 +950,11 @@ impl<F: arkPrimeField> RunningMem<F> {
             w,
         )?;
 
-        chunk_cee(cond, &cee_pack_l, &cee_pack_r, w.cs.clone());
+        chunk_cee(cond, &cee_pack_l, &cee_pack_r, w.cs.clone())?;
 
         // boundry check
         w.stack_ptrs[stack_tag].conditional_enforce_not_equal(
-            &FpVar::new_constant(
-                w.cs.clone(),
-                F::from((self.stack_spaces[stack_tag] - 1) as u64),
-            )?,
+            &FpVar::constant(F::from((self.stack_spaces[stack_tag] - 1) as u64)),
             cond,
         )?;
 
@@ -1048,7 +1038,7 @@ impl<F: arkPrimeField> RunningMem<F> {
         })?;
         //ts.conditional_enforce_equal(&(&w.ts_m1 + &FpVar::one()), &cond)?;
         cee_pack_l.push(ts.clone());
-        cee_pack_r.push((&w.ts_m1 + &FpVar::one()));
+        cee_pack_r.push(&w.ts_m1 + &FpVar::one());
 
         w.ts_m1 = cond.select(&ts, &w.ts_m1)?;
         if cond.value()? {
@@ -1090,13 +1080,9 @@ impl<F: arkPrimeField> RunningMem<F> {
             cond,
         )?;*/
         cee_pack_l.push(read_mem_elem.sr.clone());
-        cee_pack_r.push(FpVar::<F>::new_constant(
-            w.cs.clone(),
-            F::from(mem_type as u64),
-        )?);
+        cee_pack_r.push(FpVar::constant(F::from(mem_type as u64)));
 
-        let v_prime = if write_vals.is_some() {
-            let vals = write_vals.unwrap();
+        let v_prime = if let Some(vals) = write_vals {
             assert_eq!(vals.len(), self.elem_len);
             vals
         } else {
@@ -1224,9 +1210,9 @@ impl<F: arkPrimeField> RunningMem<F> {
             .conditional_enforce_equal(&Boolean::TRUE, &last_check)?;
 
         w.running_is = last_check.select(&FpVar::constant(F::zero()), &w.running_is)?;
-        w.running_rs = last_check.select(&FpVar::constant(F::zero()), &w.running_rs)?;
-        w.running_ws = last_check.select(&FpVar::constant(F::zero()), &w.running_ws)?;
-        w.running_fs = last_check.select(&FpVar::constant(F::zero()), &w.running_fs)?;
+        w.running_rs = last_check.select(&FpVar::zero(), &w.running_rs)?;
+        w.running_ws = last_check.select(&FpVar::zero(), &w.running_ws)?;
+        w.running_fs = last_check.select(&FpVar::zero(), &w.running_fs)?;
 
         // packed
         chunk_ee_zero(&eez_pack, w.cs.clone())?;
