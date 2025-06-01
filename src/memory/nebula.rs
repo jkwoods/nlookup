@@ -70,14 +70,15 @@ impl<F: arkPrimeField> MemElem<F> {
         v
     }
 
-    pub fn hash(&self, perm_chal: F) -> F {
-        let mut hash = (perm_chal - self.time) * (perm_chal - self.addr) * (perm_chal - self.sr);
+    pub fn hash(&self, perm_chal: &Vec<F>) -> F {
+        let mut hash =
+            (self.sr + F::from(1_u64 << 2) * self.time + F::from(1_u64 << 34) * self.addr);
 
         for i in 0..self.vals.len() {
-            hash = hash * (perm_chal - self.vals[i]);
+            hash = hash + (perm_chal[i + 1] * self.vals[i]);
         }
 
-        hash
+        perm_chal[0] - hash
     }
 }
 
@@ -125,15 +126,17 @@ impl<F: arkPrimeField> MemElemWires<F> {
     pub fn hash(
         &self,
         cs: ConstraintSystemRef<F>,
-        perm_chal: &FpVar<F>,
+        perm_chal: &Vec<FpVar<F>>,
     ) -> Result<FpVar<F>, SynthesisError> {
-        let mut hash = (perm_chal - &self.time) * (perm_chal - &self.addr) * (perm_chal - &self.sr);
+        let mut hash = (&self.sr
+            + FpVar::constant(F::from(1_u64 << 2)) * &self.time
+            + FpVar::constant(F::from(1_u64 << 34)) * &self.addr);
 
         for i in 0..self.vals.len() {
-            hash = hash * (perm_chal - &self.vals[i]);
+            hash = hash + (&perm_chal[i + 1] * &self.vals[i]);
         }
 
-        Ok(hash)
+        Ok(&perm_chal[0] - hash)
     }
 }
 
@@ -622,7 +625,17 @@ impl<F: arkPrimeField> MemBuilder<F> {
         );
         //println!("RAM HINTS {:#?}", ram_hints);
 
-        let perm_chal = nova_to_ark_field::<N1, F>(&sample_challenge(&ic_cmt));
+        let nova_perm_chal = sample_challenges(&ic_cmt);
+        let mut perm_chal = vec![
+            nova_to_ark_field::<N1, F>(&nova_perm_chal[0]),
+            nova_to_ark_field::<N1, F>(&nova_perm_chal[1]),
+        ];
+
+        let mut chal_pow = perm_chal[1];
+        for c in 1..self.elem_len {
+            chal_pow = chal_pow * perm_chal[1];
+            perm_chal.push(chal_pow);
+        }
 
         let mut rm = RunningMem {
             priv_is: self.priv_is,
@@ -663,7 +676,7 @@ pub struct RunningMem<F: arkPrimeField> {
     pub_fs: Vec<MemElem<F>>,
     pub_hashes: (F, F),
     ts: F,
-    pub perm_chal: F,
+    pub perm_chal: Vec<F>,
     pub elem_len: usize,
     pub scan_per_batch: usize,
     s: usize, // iter through scan
@@ -686,18 +699,25 @@ pub struct RunningMemWires<F: arkPrimeField> {
     pub running_ws: FpVar<F>,
     pub running_fs: FpVar<F>,
     pub ts_m1: FpVar<F>,
-    pub perm_chal: FpVar<F>,
+    pub perm_chal: Vec<FpVar<F>>,
     pub stack_ptrs: Vec<FpVar<F>>,
 }
 
 impl<F: arkPrimeField> RunningMem<F> {
-    pub fn get_dummy(&self) -> Self {
+    pub fn get_dummy(&self, ic_cmt: &Vec<N2>) -> Self {
         let mut mem_wits = HashMap::new();
-        mem_wits.insert(self.padding.addr, self.padding.clone());
-        /*self.mem_wits.clone();
-        for (_, elem) in mem_wits.iter_mut() {
-            *elem = self.padding.clone();
-        }*/
+
+        let nova_perm_chal = sample_challenges(ic_cmt);
+        let mut perm_chal = vec![
+            nova_to_ark_field::<N1, F>(&nova_perm_chal[0]),
+            nova_to_ark_field::<N1, F>(&nova_perm_chal[1]),
+        ];
+
+        let mut chal_pow = perm_chal[1];
+        for c in 1..self.elem_len {
+            chal_pow = chal_pow * perm_chal[1];
+            perm_chal.push(chal_pow);
+        }
 
         Self {
             priv_is: vec![self.padding.clone(); self.priv_is.len()],
@@ -707,7 +727,7 @@ impl<F: arkPrimeField> RunningMem<F> {
             pub_fs: self.pub_fs.clone(),
             pub_hashes: self.pub_hashes.clone(),
             ts: F::zero(),
-            perm_chal: self.perm_chal,
+            perm_chal,
             elem_len: self.elem_len,
             scan_per_batch: self.scan_per_batch,
             s: self.s,
@@ -723,12 +743,12 @@ impl<F: arkPrimeField> RunningMem<F> {
     pub fn get_pub_is_fs_hashes(&self) -> (F, F) {
         let mut pub_is = F::one();
         for elem in &self.pub_is {
-            pub_is *= elem.hash(self.perm_chal);
+            pub_is *= elem.hash(&self.perm_chal);
         }
 
         let mut pub_fs = F::one();
         for elem in &self.pub_fs {
-            pub_fs *= elem.hash(self.perm_chal);
+            pub_fs *= elem.hash(&self.perm_chal);
         }
 
         (pub_is, pub_fs)
@@ -779,7 +799,24 @@ impl<F: arkPrimeField> RunningMem<F> {
         let running_ws = FpVar::new_witness(cs.clone(), || Ok(running_ws))?;
         let running_fs = FpVar::new_witness(cs.clone(), || Ok(running_fs))?;
         let ts_m1 = FpVar::new_witness(cs.clone(), || Ok(self.ts))?;
-        let perm_chal = FpVar::new_witness(cs.clone(), || Ok(self.perm_chal))?;
+        let mut perm_chal = vec![
+            FpVar::new_witness(cs.clone(), || Ok(self.perm_chal[0]))?,
+            FpVar::new_witness(cs.clone(), || Ok(self.perm_chal[1]))?,
+        ];
+        let mut chal_pow = perm_chal[1].clone();
+        for i in 1..self.elem_len {
+            chal_pow = &chal_pow * &perm_chal[1];
+            perm_chal.push(chal_pow.clone());
+        }
+
+        println!(
+            "PERM CHAL {:#?}",
+            perm_chal
+                .iter()
+                .map(|p| p.value())
+                .collect::<Result<Vec<F>, SynthesisError>>()
+        );
+
         let stack_ptrs = stack_ptrs
             .iter()
             .map(|sp| FpVar::new_witness(cs.clone(), || Ok(sp)))
@@ -1240,14 +1277,17 @@ impl<F: arkPrimeField> RunningMem<F> {
 }
 
 // deterministic
-pub fn sample_challenge(ic_cmts: &Vec<N2>) -> N1 {
+pub fn sample_challenges(ic_cmts: &Vec<N2>) -> [N1; 2] {
     let ro_consts = ROConstants::<E1>::default();
     let mut hasher = <E1 as Engine>::RO::new(ro_consts);
     for c in ic_cmts {
         hasher.absorb(*c);
     }
 
-    scalar_as_base::<E2>(hasher.squeeze(250)) // num hash bits from nova
+    [
+        scalar_as_base::<E2>(hasher.squeeze(250)),
+        scalar_as_base::<E2>(hasher.squeeze(250)),
+    ] // num hash bits from nova
 }
 
 mod tests {
@@ -1584,7 +1624,7 @@ mod tests {
         assert_eq!(pub_is, rm.pub_hashes.0);
         assert_eq!(pub_fs, rm.pub_hashes.1);
 
-        println!("Z {:#?}", zn);
+        //println!("Z {:#?}", zn);
         // is * ws == rs * fs (verifier)
         assert_eq!(zn[5], N1::from(1));
 
