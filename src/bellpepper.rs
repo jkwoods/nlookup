@@ -50,13 +50,13 @@ pub fn ark_to_nova_field<
     let bytes = u64x4_to_u8x32(&b.0);
 
     // bytes -> nova F
-    N::from_repr(TryInto::<Repr<32>>::try_into(bytes).unwrap()).unwrap()
+    N::from_repr_vartime(Repr::from(bytes)).unwrap()
 }
 
 #[inline]
 fn u64x4_to_u8x32(input: &[u64; 4]) -> [u8; 32] {
     let mut output = [0u8; 32];
-    for (chunk, &val) in output.chunks_mut(8).zip(input) {
+    for (chunk, &val) in output.chunks_exact_mut(8).zip(input) {
         chunk.copy_from_slice(&val.to_le_bytes());
     }
     output
@@ -151,20 +151,20 @@ impl<N: novaPrimeField<Repr = Repr<32>>> FCircuit<N> {
         let input_assignments = instance_assignment[1..]
             .par_iter()
             .step_by(2)
-            .map(|io| ark_to_nova_field(io))
+            .map(ark_to_nova_field)
             .collect();
 
         let output_assignments = instance_assignment[2..]
             .par_iter()
             .step_by(2)
-            .map(|io| ark_to_nova_field(io))
+            .map(ark_to_nova_field)
             .collect();
 
         let wit_assignments: Vec<N> = ark_cs
             .witness_assignment()
             .unwrap()
             .par_iter()
-            .map(|f| ark_to_nova_field(f))
+            .map(ark_to_nova_field)
             .collect();
 
         let lcs = if nova_matrices.is_some() {
@@ -176,15 +176,15 @@ impl<N: novaPrimeField<Repr = Repr<32>>> FCircuit<N> {
                 .map(|i| {
                     (
                         ark_matrices[0][i]
-                            .par_iter()
+                            .iter()
                             .map(|(val, index)| (ark_to_nova_field(val), *index))
                             .collect(),
                         ark_matrices[1][i]
-                            .par_iter()
+                            .iter()
                             .map(|(val, index)| (ark_to_nova_field(val), *index))
                             .collect(),
                         ark_matrices[2][i]
-                            .par_iter()
+                            .iter()
                             .map(|(val, index)| (ark_to_nova_field(val), *index))
                             .collect(),
                     )
@@ -230,7 +230,7 @@ impl<N: novaPrimeField<Repr = Repr<32>>> StepCircuit<N> for FCircuit<N> {
         // combine io
         let alloc_io = z
             .par_iter()
-            .zip(alloc_out.par_iter())
+            .zip(&alloc_out)
             .flat_map(|(zi, oi)| [zi.clone(), oi.clone()])
             .collect::<Vec<_>>();
 
