@@ -222,7 +222,7 @@ impl<N: novaPrimeField<Repr = Repr<32>>> StepCircuit<N> for FCircuit<N> {
         assert_eq!(z.len(), self.input_assignments.len());
         
         // alloc outputs
-        let alloc_out = cs.alloc_batch(|| Ok(&self.output_assignments))?;
+        let alloc_out = AllocatedNum::alloc_batch(cs.namespace(|| "out"), || Ok(&self.output_assignments))?;
 
         // combine io
         let alloc_io = z
@@ -232,12 +232,7 @@ impl<N: novaPrimeField<Repr = Repr<32>>> StepCircuit<N> for FCircuit<N> {
             .collect::<Vec<_>>();
 
         // allocate all wits
-        let alloc_wits = self
-            .wit_assignments
-            .iter()
-            .enumerate()
-            .map(|(i, w)| AllocatedNum::alloc(cs.namespace(|| format!("wit {}", i)), || Ok(*w)))
-            .collect::<Result<Vec<_>, bpSynthesisError>>()?;
+        let alloc_wits = AllocatedNum::alloc_batch(&mut cs.namespace(|| "wit"), || Ok(&self.wit_assignments))?;
 
         // add constraints
 
