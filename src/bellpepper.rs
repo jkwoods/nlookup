@@ -109,6 +109,7 @@ fn bellpepper_lc<N: novaPrimeField, CS: ConstraintSystem<N>>(
 
     lc_bellpepper
 }
+
 type Constraint<N> = (
     LinearCombination<N>,
     LinearCombination<N>,
@@ -167,8 +168,8 @@ impl<N: novaPrimeField<Repr = Repr<32>>> FCircuit<N> {
             .map(ark_to_nova_field)
             .collect();
 
-        let lcs = if nova_matrices.is_some() {
-            Either::Right(nova_matrices.unwrap())
+        let lcs = if let Some(nova_matrices) = nova_matrices {
+            Either::Right(nova_matrices)
         } else {
             let ark_matrices = &ark_cs.to_matrices().unwrap()[R1CS_PREDICATE_LABEL];
             let lcs = (0..ark_matrices[0].len())
@@ -245,7 +246,9 @@ impl<N: novaPrimeField<Repr = Repr<32>>> StepCircuit<N> for FCircuit<N> {
                     let a_lc = bellpepper_lc::<N, CS>(&alloc_io, &alloc_wits, a);
                     let b_lc = bellpepper_lc::<N, CS>(&alloc_io, &alloc_wits, b);
                     let c_lc = bellpepper_lc::<N, CS>(&alloc_io, &alloc_wits, c);
-                    cs.enforce(|| format!("con{i}"), |_| a_lc.clone(), |_| b_lc.clone(), |_| c_lc.clone());
+                    if !cs.is_witness_generator() {
+                        cs.enforce(|| format!("con{i}"), |_| a_lc.clone(), |_| b_lc.clone(), |_| c_lc.clone());
+                    }
                     (a_lc, b_lc, c_lc)
                 }).collect();
                 self.lcs = Either::Right(Arc::new(saved_lcs))
