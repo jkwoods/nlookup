@@ -239,7 +239,7 @@ impl<N: novaPrimeField<Repr = Repr<32>>> StepCircuit<N> for FCircuit<N> {
 
         // add constraints
 
-        self.lcs = match &self.lcs {
+        match &self.lcs {
             Either::Left(lcs) => {
                 let saved_lcs = lcs.iter().enumerate().map(|(i, (a, b, c))| {
                     let a_lc = bellpepper_lc::<N, CS>(&alloc_io, &alloc_wits, a);
@@ -248,7 +248,7 @@ impl<N: novaPrimeField<Repr = Repr<32>>> StepCircuit<N> for FCircuit<N> {
                     cs.enforce(|| format!("con{i}"), |_| a_lc.clone(), |_| b_lc.clone(), |_| c_lc.clone());
                     (a_lc, b_lc, c_lc)
                 }).collect();
-                Either::Right(Arc::new(saved_lcs))
+                self.lcs = Either::Right(Arc::new(saved_lcs))
             }
             Either::Right(saved_lcs) => {
                 if !cs.is_witness_generator() {
@@ -264,9 +264,8 @@ impl<N: novaPrimeField<Repr = Repr<32>>> StepCircuit<N> for FCircuit<N> {
                         );
                     });
                 }
-                Either::Right(saved_lcs.clone())
             }
-        };
+        }
 
         Ok(alloc_out)
     }
