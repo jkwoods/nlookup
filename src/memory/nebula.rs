@@ -13,15 +13,17 @@ use ark_relations::{
     lc, ns,
 };
 use ark_std::test_rng;
+use itertools::multiunzip;
 use nova_snark::{
     gadgets::utils::scalar_as_base,
-    provider::incremental::Incremental,
+    provider::{hyperkzg::Commitment, incremental::Incremental},
     traits::{
         commitment::{CommitmentEngineTrait, Len},
         Engine, ROConstants, ROTrait,
     },
 };
-use std::collections::HashMap;
+use rayon::prelude::*;
+use rustc_hash::{FxHashMap as HashMap};
 
 type CommitmentKey<E> = <<E as Engine>::CE as CommitmentEngineTrait<E>>::CommitmentKey;
 
@@ -189,12 +191,12 @@ impl<F: arkPrimeField> MemBuilder<F> {
         }
 
         let mb = Self {
-            mem: HashMap::new(),
+            mem: new_hash_map(),
             pub_is: Vec::new(),
             priv_is: Vec::new(),
             rs: Vec::new(),
             ws: Vec::new(),
-            fs: HashMap::new(),
+            fs: new_hash_map(),
             mem_spaces,
             stack_spaces,
             stack_ptrs,
@@ -392,118 +394,148 @@ impl<F: arkPrimeField> MemBuilder<F> {
         let num_cmts = if sep_final { 3 } else { 1 };
 
         let mut ci: Vec<Option<N2>> = vec![None; num_cmts];
-        let mut blinds: Vec<Vec<N1>> = vec![Vec::new(); num_iters];
-        let mut ram_hints = Vec::new();
+        // let mut inner_commits: Vec<Vec<Option<Commitment<E1>>>> =
+        //    vec![vec![None; num_iters]; num_cmts];
+        //let mut blinds: Vec<Vec<N1>> = vec![vec![N1::zero(); num_cmts]; num_iters];
+        //let mut ram_hints = vec![Vec::new(); num_iters];
 
-        for i in 0..num_iters {
-            let mut is_hint = Vec::new();
-            let mut rs_ws_hint = Vec::new();
-            let mut fs_hint = Vec::new();
+        let zipped: Vec<(Vec<Commitment<E1>>, Vec<N1>, Vec<N1>)> = (0..num_iters)
+            .into_par_iter()
+            .map(|i| {
+                let mut is_hint = Vec::new();
+                let mut rs_ws_hint = Vec::new();
+                let mut fs_hint = Vec::new();
 
-            let is_slice = if (i * scan_batch_size + scan_batch_size) <= self.priv_is.len() {
-                self.priv_is[(i * scan_batch_size)..(i * scan_batch_size + scan_batch_size)]
-                    .to_vec()
-            } else {
-                if (i * scan_batch_size) <= self.priv_is.len() {
-                    let mut is_slice = self.priv_is[(i * scan_batch_size)..].to_vec();
-                    is_slice.extend(vec![padding.clone(); scan_batch_size - is_slice.len()]);
-
-                    is_slice
+                let is_slice = if (i * scan_batch_size + scan_batch_size) <= self.priv_is.len() {
+                    self.priv_is[(i * scan_batch_size)..(i * scan_batch_size + scan_batch_size)]
+                        .to_vec()
                 } else {
-                    vec![padding.clone(); scan_batch_size]
-                }
-            };
+                    if (i * scan_batch_size) <= self.priv_is.len() {
+                        let mut is_slice = self.priv_is[(i * scan_batch_size)..].to_vec();
+                        is_slice.extend(vec![padding.clone(); scan_batch_size - is_slice.len()]);
 
-            let fs_slice = if (i * scan_batch_size + scan_batch_size) <= priv_fs.len() {
-                (priv_fs[(i * scan_batch_size)..(i * scan_batch_size + scan_batch_size)].to_vec())
-            } else {
-                if (i * scan_batch_size) <= priv_fs.len() {
-                    let mut fs_slice = priv_fs[(i * scan_batch_size)..].to_vec();
-                    fs_slice.extend(vec![padding.clone(); scan_batch_size - fs_slice.len()]);
-
-                    fs_slice
-                } else {
-                    (vec![padding.clone(); scan_batch_size])
-                }
-            };
-
-            for im in is_slice {
-                let nova_im: Vec<N1> = im
-                    .get_vec()
-                    .iter()
-                    .map(|a| ark_to_nova_field::<F, N1>(a))
-                    .collect();
-                is_hint.extend(nova_im);
-            }
-
-            for fm in fs_slice.iter() {
-                let nova_fm: Vec<N1> = fm
-                    .get_vec()
-                    .iter()
-                    .map(|a| ark_to_nova_field::<F, N1>(a))
-                    .collect();
-
-                fs_hint.extend(nova_fm);
-            }
-
-            for (rm, wm) in self.rs[(i * rw_batch_size)..(i * rw_batch_size + rw_batch_size)]
-                .iter()
-                .zip(self.ws[(i * rw_batch_size)..(i * rw_batch_size + rw_batch_size)].iter())
-            {
-                let nova_rm: Vec<N1> = rm
-                    .get_vec()
-                    .iter()
-                    .map(|a| ark_to_nova_field::<F, N1>(a))
-                    .collect();
-                let nova_wm: Vec<N1> = wm
-                    .get_vec()
-                    .iter()
-                    .map(|a| ark_to_nova_field::<F, N1>(a))
-                    .collect();
-
-                rs_ws_hint.extend(nova_rm);
-                rs_ws_hint.extend(nova_wm);
-            }
-
-            let mut ordered_hints: Vec<_> = is_hint;
-            ordered_hints.extend(rs_ws_hint);
-            ordered_hints.extend(fs_hint);
-
-            let isb = scan_batch_size * (3 + self.elem_len);
-            let fsb = scan_batch_size * (3 + self.elem_len);
-            let rwb = rw_batch_size * (3 + self.elem_len);
-
-            let hint_ranges = if sep_final {
-                vec![
-                    0..isb,
-                    isb..(isb + rwb * 2),
-                    (isb + rwb * 2)..(isb + fsb + rwb * 2),
-                ]
-            } else {
-                vec![0..(isb + fsb + rwb * 2)]
-            };
-            //println!("HINT RANGES {:#?}", hint_ranges);
-
-            let mut cmt_wits = vec![Vec::new(); num_cmts];
-
-            for k in 0..num_cmts {
-                for (j, range) in hint_ranges.iter().enumerate() {
-                    if j == k {
-                        cmt_wits[k].extend(&ordered_hints[range.clone()]);
+                        is_slice
                     } else {
-                        cmt_wits[k].extend(vec![N1::zero(); range.len()]);
+                        vec![padding.clone(); scan_batch_size]
+                    }
+                };
+
+                let fs_slice = if (i * scan_batch_size + scan_batch_size) <= priv_fs.len() {
+                    (priv_fs[(i * scan_batch_size)..(i * scan_batch_size + scan_batch_size)]
+                        .to_vec())
+                } else {
+                    if (i * scan_batch_size) <= priv_fs.len() {
+                        let mut fs_slice = priv_fs[(i * scan_batch_size)..].to_vec();
+                        fs_slice.extend(vec![padding.clone(); scan_batch_size - fs_slice.len()]);
+
+                        fs_slice
+                    } else {
+                        (vec![padding.clone(); scan_batch_size])
+                    }
+                };
+
+                for im in is_slice {
+                    let nova_im: Vec<N1> = im
+                        .get_vec()
+                        .iter()
+                        .map(|a| ark_to_nova_field::<F, N1>(a))
+                        .collect();
+                    is_hint.extend(nova_im);
+                }
+
+                for fm in fs_slice.iter() {
+                    let nova_fm: Vec<N1> = fm
+                        .get_vec()
+                        .iter()
+                        .map(|a| ark_to_nova_field::<F, N1>(a))
+                        .collect();
+
+                    fs_hint.extend(nova_fm);
+                }
+
+                for (rm, wm) in self.rs[(i * rw_batch_size)..(i * rw_batch_size + rw_batch_size)]
+                    .iter()
+                    .zip(self.ws[(i * rw_batch_size)..(i * rw_batch_size + rw_batch_size)].iter())
+                {
+                    let nova_rm: Vec<N1> = rm
+                        .get_vec()
+                        .iter()
+                        .map(|a| ark_to_nova_field::<F, N1>(a))
+                        .collect();
+                    let nova_wm: Vec<N1> = wm
+                        .get_vec()
+                        .iter()
+                        .map(|a| ark_to_nova_field::<F, N1>(a))
+                        .collect();
+
+                    rs_ws_hint.extend(nova_rm);
+                    rs_ws_hint.extend(nova_wm);
+                }
+
+                let mut ordered_hints: Vec<_> = is_hint;
+                ordered_hints.extend(rs_ws_hint);
+                ordered_hints.extend(fs_hint);
+
+                let isb = scan_batch_size * (3 + self.elem_len);
+                let fsb = scan_batch_size * (3 + self.elem_len);
+                let rwb = rw_batch_size * (3 + self.elem_len);
+
+                let hint_ranges = if sep_final {
+                    vec![
+                        0..isb,
+                        isb..(isb + rwb * 2),
+                        (isb + rwb * 2)..(isb + fsb + rwb * 2),
+                    ]
+                } else {
+                    vec![0..(isb + fsb + rwb * 2)]
+                };
+                //println!("HINT RANGES {:#?}", hint_ranges);
+
+                let mut cmt_wits = vec![Vec::new(); num_cmts];
+
+                for k in 0..num_cmts {
+                    for (j, range) in hint_ranges.iter().enumerate() {
+                        if j == k {
+                            cmt_wits[k].extend(&ordered_hints[range.clone()]);
+                        } else {
+                            cmt_wits[k].extend(vec![N1::zero(); range.len()]);
+                        }
                     }
                 }
-            }
 
+                let mut blinds_i = Vec::new();
+                let mut inner_commits_i = Vec::new();
+                for j in 0..num_cmts {
+                    let (inner, blind) = ic_gen.inner_commit(&cmt_wits[j]);
+
+                    //inner_commits[i][j] = Some(inner);
+                    inner_commits_i.push(inner);
+                    //blinds[i][j] = blind;
+                    blinds_i.push(blind);
+                }
+
+                //ram_hints[i] = ordered_hints;
+                (inner_commits_i, blinds_i, ordered_hints)
+            })
+            .collect();
+
+        let (inner_commits, blinds, ram_hints): (
+            Vec<Vec<Commitment<E1>>>,
+            Vec<Vec<N1>>,
+            Vec<Vec<N1>>,
+        ) = multiunzip(zipped);
+
+        // let mut inner_commits: Vec<Vec<Option<Commitment<E1>>>> =
+        //    vec![vec![None; num_iters]; num_cmts];
+        //let mut blinds: Vec<Vec<N1>> = vec![vec![N1::zero(); num_cmts]; num_iters];
+        //let mut ram_hints = vec![Vec::new(); num_iters];
+
+        for i in 0..num_iters {
             for j in 0..num_cmts {
                 //println!("cmt wits {:#?}", cmt_wits[j]);
-                let (hash, blind) = ic_gen.commit(ci[j], &cmt_wits[j]);
+                let hash = ic_gen.hash(ci[j], &inner_commits[i][j]);
                 ci[j] = Some(hash);
-
-                blinds[i].push(blind);
             }
-            ram_hints.push(ordered_hints);
         }
 
         let final_cmts = ci.iter().map(|c| c.unwrap()).collect();
@@ -560,7 +592,7 @@ impl<F: arkPrimeField> MemBuilder<F> {
             self.priv_is.len() + self.pub_is.len()
         );
 
-        let mut mem_wits = HashMap::new();
+        let mut mem_wits = new_hash_map();
         for elem in &self.pub_is {
             mem_wits.insert(elem.addr, elem.clone());
         }
@@ -588,6 +620,7 @@ impl<F: arkPrimeField> MemBuilder<F> {
             priv_fs,
             &padding,
         );
+        //println!("RAM HINTS {:#?}", ram_hints);
 
         let perm_chal = nova_to_ark_field::<N1, F>(&sample_challenge(&ic_cmt));
 
@@ -659,7 +692,7 @@ pub struct RunningMemWires<F: arkPrimeField> {
 
 impl<F: arkPrimeField> RunningMem<F> {
     pub fn get_dummy(&self) -> Self {
-        let mut mem_wits = HashMap::new();
+        let mut mem_wits = new_hash_map();
         mem_wits.insert(self.padding.addr, self.padding.clone());
         /*self.mem_wits.clone();
         for (_, elem) in mem_wits.iter_mut() {
@@ -688,15 +721,8 @@ impl<F: arkPrimeField> RunningMem<F> {
 
     // can be called by prove on real RunningMem or by Verifier on dummy to produce same result
     pub fn get_pub_is_fs_hashes(&self) -> (F, F) {
-        let mut pub_is = F::one();
-        for elem in &self.pub_is {
-            pub_is *= elem.hash(self.perm_chal);
-        }
-
-        let mut pub_fs = F::one();
-        for elem in &self.pub_fs {
-            pub_fs *= elem.hash(self.perm_chal);
-        }
+        let pub_is = self.pub_is.par_iter().map(|e| e.hash(self.perm_chal)).product::<F>();
+        let pub_fs = self.pub_fs.par_iter().map(|e| e.hash(self.perm_chal)).product::<F>();
 
         (pub_is, pub_fs)
     }
@@ -801,10 +827,7 @@ impl<F: arkPrimeField> RunningMem<F> {
 
         // boundry check
         w.stack_ptrs[stack_tag].conditional_enforce_not_equal(
-            &FpVar::new_constant(
-                w.cs.clone(),
-                F::from((self.stack_spaces[stack_tag + 1] + 1) as u64),
-            )?,
+            &FpVar::constant(F::from((self.stack_spaces[stack_tag + 1] + 1) as u64)),
             cond,
         )?;
 
@@ -927,14 +950,11 @@ impl<F: arkPrimeField> RunningMem<F> {
             w,
         )?;
 
-        chunk_cee(cond, &cee_pack_l, &cee_pack_r, w.cs.clone());
+        chunk_cee(cond, &cee_pack_l, &cee_pack_r, w.cs.clone())?;
 
         // boundry check
         w.stack_ptrs[stack_tag].conditional_enforce_not_equal(
-            &FpVar::new_constant(
-                w.cs.clone(),
-                F::from((self.stack_spaces[stack_tag] - 1) as u64),
-            )?,
+            &FpVar::constant(F::from((self.stack_spaces[stack_tag] - 1) as u64)),
             cond,
         )?;
 
@@ -1018,7 +1038,7 @@ impl<F: arkPrimeField> RunningMem<F> {
         })?;
         //ts.conditional_enforce_equal(&(&w.ts_m1 + &FpVar::one()), &cond)?;
         cee_pack_l.push(ts.clone());
-        cee_pack_r.push((&w.ts_m1 + &FpVar::one()));
+        cee_pack_r.push(&w.ts_m1 + &FpVar::one());
 
         w.ts_m1 = cond.select(&ts, &w.ts_m1)?;
         if cond.value()? {
@@ -1060,13 +1080,9 @@ impl<F: arkPrimeField> RunningMem<F> {
             cond,
         )?;*/
         cee_pack_l.push(read_mem_elem.sr.clone());
-        cee_pack_r.push(FpVar::<F>::new_constant(
-            w.cs.clone(),
-            F::from(mem_type as u64),
-        )?);
+        cee_pack_r.push(FpVar::constant(F::from(mem_type as u64)));
 
-        let v_prime = if write_vals.is_some() {
-            let vals = write_vals.unwrap();
+        let v_prime = if let Some(vals) = write_vals {
             assert_eq!(vals.len(), self.elem_len);
             vals
         } else {
@@ -1194,12 +1210,12 @@ impl<F: arkPrimeField> RunningMem<F> {
             .conditional_enforce_equal(&Boolean::TRUE, &last_check)?;
 
         w.running_is = last_check.select(&FpVar::constant(F::zero()), &w.running_is)?;
-        w.running_rs = last_check.select(&FpVar::constant(F::zero()), &w.running_rs)?;
-        w.running_ws = last_check.select(&FpVar::constant(F::zero()), &w.running_ws)?;
-        w.running_fs = last_check.select(&FpVar::constant(F::zero()), &w.running_fs)?;
+        w.running_rs = last_check.select(&FpVar::zero(), &w.running_rs)?;
+        w.running_ws = last_check.select(&FpVar::zero(), &w.running_ws)?;
+        w.running_fs = last_check.select(&FpVar::zero(), &w.running_fs)?;
 
         // packed
-        chunk_ee_zero(&eez_pack, &FpVar::constant(F::zero()), w.cs.clone())?;
+        chunk_ee_zero(&eez_pack, w.cs.clone())?;
         chunk_ee(&ee_addr_pack_l, &ee_addr_pack_r, w.cs.clone())?;
 
         Ok((is_elems, fs_elems, last_check))
@@ -1231,7 +1247,7 @@ mod tests {
     use ff::Field as novaField;
     use ff::PrimeField as novaPrimeField;
     use nova_snark::{
-        nova::{CompressedSNARK, PublicParams, RecursiveSNARK},
+        nova::{CompressedSNARK, PublicParams, RandomLayer, RecursiveSNARK},
         traits::{circuit::TrivialCircuit, snark::default_ck_hint, Engine},
     };
 
@@ -1289,6 +1305,7 @@ mod tests {
         assert!(res.is_ok());
         let (mut next_mem_ops, f, last_check) = res.unwrap();
 
+        /*
         println!("INIT");
         for mo in &next_mem_ops {
             mo.print_vals();
@@ -1300,7 +1317,7 @@ mod tests {
         println!("FINAL");
         for mo in &f {
             mo.print_vals();
-        }
+        }*/
 
         next_mem_ops.extend(rw_mem_ops);
         next_mem_ops.extend(f);
@@ -1532,7 +1549,10 @@ mod tests {
         let (pk, vk) = CompressedSNARK::<_, _, _, S1, S2>::setup(&pp).unwrap();
 
         // produce a compressed SNARK
-        let res = CompressedSNARK::<_, _, _, S1, S2>::prove(&pp, &pk, &recursive_snark);
+        let random_layer: RandomLayer<E1, E2> =
+            CompressedSNARK::<_, _, _, S1, S2>::sample_random_layer(&pp).unwrap();
+        let res =
+            CompressedSNARK::<_, _, _, S1, S2>::prove(&pp, &pk, &recursive_snark, random_layer);
         assert!(res.is_ok());
         let compressed_snark = res.unwrap();
 

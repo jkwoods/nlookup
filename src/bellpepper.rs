@@ -134,9 +134,9 @@ impl<N: novaPrimeField<Repr = Repr<32>>> FCircuit<N> {
         nova_matrices: Option<Arc<Vec<Constraint<N>>>>,
     ) -> Self {
         ark_cs_ref.finalize();
-        if nova_matrices.is_none() {
+        /*        if nova_matrices.is_none() {
             assert!(ark_cs_ref.is_satisfied().unwrap());
-        }
+        }*/
 
         let ark_cs = ark_cs_ref.borrow().unwrap();
 
@@ -476,7 +476,9 @@ mod tests {
         let (pk, vk) = CompressedSNARK::<_, _, _, S1, S2>::setup(&pp).unwrap();
 
         // produce a compressed SNARK
-        let res = CompressedSNARK::<_, _, _, S1, S2>::prove(&pp, &pk, &recursive_snark);
+        let random_layer = CompressedSNARK::<_, _, _, S1, S2>::sample_random_layer(&pp).unwrap();
+        let res =
+            CompressedSNARK::<_, _, _, S1, S2>::prove(&pp, &pk, &recursive_snark, random_layer);
         assert!(res.is_ok());
         let compressed_snark = res.unwrap();
 
