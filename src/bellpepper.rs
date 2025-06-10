@@ -36,6 +36,7 @@ pub trait AllocIoVar<V: ?Sized, A: arkField>: Sized + AllocVar<V, A> {
 impl<A: arkField> AllocIoVar<bool, A> for Boolean<A> {}
 impl<A: arkPrimeField> AllocIoVar<A, A> for FpVar<A> {}
 
+#[inline]
 pub fn ark_to_nova_field<
     A: arkPrimeField<BigInt = BigInteger256>,
     N: novaPrimeField<Repr = Repr<32>>,
@@ -52,6 +53,7 @@ pub fn ark_to_nova_field<
     N::from_repr(TryInto::<Repr<32>>::try_into(bytes).unwrap()).unwrap()
 }
 
+#[inline]
 fn u64x4_to_u8x32(input: &[u64; 4]) -> [u8; 32] {
     let mut output = [0u8; 32];
     for (chunk, &val) in output.chunks_mut(8).zip(input) {
@@ -68,6 +70,7 @@ pub fn nova_to_ark_field<N: novaPrimeField<Repr = Repr<32>>, A: arkPrimeField>(n
     A::from_le_bytes_mod_order(b.inner())
 }
 
+#[inline]
 pub fn ark_to_u64<A: arkPrimeField<BigInt = BigInteger256>>(ark_ff: &A) -> u64 {
     // ark F -> ark BigInt
     let b = ark_ff.into_bigint();
@@ -81,11 +84,11 @@ pub fn ark_to_u64<A: arkPrimeField<BigInt = BigInteger256>>(ark_ff: &A) -> u64 {
     limbs[0]
 }
 
+#[inline]
 fn bellpepper_lc<N: novaPrimeField, CS: ConstraintSystem<N>>(
-    alloc_io: &Vec<AllocatedNum<N>>,
-    alloc_wits: &Vec<AllocatedNum<N>>,
+    alloc_io: &[AllocatedNum<N>],
+    alloc_wits: &[AllocatedNum<N>],
     lc: &Vec<(N, usize)>,
-    i: usize,
 ) -> LinearCombination<N> {
     let mut lc_bellpepper = LinearCombination::zero();
 
@@ -238,22 +241,18 @@ impl<N: novaPrimeField<Repr = Repr<32>>> StepCircuit<N> for FCircuit<N> {
 
         self.lcs = match &self.lcs {
             Either::Left(lcs) => {
-                let mut saved_lcs = Vec::new();
-
-                lcs.iter().enumerate().for_each(|(i, (a, b, c))| {
-                    let a_lc = bellpepper_lc::<N, CS>(&alloc_io, &alloc_wits, a, i);
-                    let b_lc = bellpepper_lc::<N, CS>(&alloc_io, &alloc_wits, b, i);
-                    let c_lc = bellpepper_lc::<N, CS>(&alloc_io, &alloc_wits, c, i);
-
-                    saved_lcs.push((a_lc.clone(), b_lc.clone(), c_lc.clone()));
-
-                    cs.enforce(|| format!("con{}", i), |_| a_lc, |_| b_lc, |_| c_lc);
-                });
-
+                let saved_lcs = lcs.iter().enumerate().map(|(i, (a, b, c))| {
+                    let a_lc = bellpepper_lc::<N, CS>(&alloc_io, &alloc_wits, a);
+                    let b_lc = bellpepper_lc::<N, CS>(&alloc_io, &alloc_wits, b);
+                    let c_lc = bellpepper_lc::<N, CS>(&alloc_io, &alloc_wits, c);
+                    cs.enforce(|| format!("con{i}"), |_| a_lc.clone(), |_| b_lc.clone(), |_| c_lc.clone());
+                    (a_lc, b_lc, c_lc)
+                }).collect();
                 Either::Right(Arc::new(saved_lcs))
             }
             Either::Right(saved_lcs) => {
-                saved_lcs
+                if !cs.is_witness_generator() {
+                    saved_lcs
                     .iter()
                     .enumerate()
                     .for_each(|(i, (a_lc, b_lc, c_lc))| {
@@ -264,6 +263,7 @@ impl<N: novaPrimeField<Repr = Repr<32>>> StepCircuit<N> for FCircuit<N> {
                             |_| c_lc.clone(),
                         );
                     });
+                }
                 Either::Right(saved_lcs.clone())
             }
         };
