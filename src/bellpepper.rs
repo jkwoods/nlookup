@@ -15,7 +15,6 @@ use nova_snark::frontend::{
     num::AllocatedNum, ConstraintSystem, LinearCombination, SynthesisError as bpSynthesisError,
 };
 use nova_snark::traits::circuit::StepCircuit;
-use rayon::iter::ParallelBridge;
 use rayon::prelude::*;
 use std::sync::Arc;
 
@@ -107,18 +106,19 @@ fn bellpepper_lc<N: novaPrimeField, CS: ConstraintSystem<N>>(
 
     lc_bellpepper
 }
+type Constraint<N> = (
+    LinearCombination<N>,
+    LinearCombination<N>,
+    LinearCombination<N>,
+);
+
+type LcUsize<N> = Vec<(N, usize)>;
 
 #[derive(Clone, Debug)]
 pub struct FCircuit<N: novaPrimeField<Repr = Repr<32>>> {
     pub lcs: Either<
-        Vec<(Vec<(N, usize)>, Vec<(N, usize)>, Vec<(N, usize)>)>,
-        Arc<
-            Vec<(
-                LinearCombination<N>,
-                LinearCombination<N>,
-                LinearCombination<N>,
-            )>,
-        >,
+        Vec<(LcUsize<N>, LcUsize<N>, LcUsize<N>)>,
+        Arc<Vec<Constraint<N>>>,
     >,
     wit_assignments: Vec<N>,
     input_assignments: Vec<N>,
@@ -131,15 +131,7 @@ impl<N: novaPrimeField<Repr = Repr<32>>> FCircuit<N> {
     // (i.e. a user should have never called new_input())
     pub fn new<A: arkPrimeField<BigInt = BigInteger256>>(
         ark_cs_ref: ConstraintSystemRef<A>,
-        nova_matrices: Option<
-            Arc<
-                Vec<(
-                    LinearCombination<N>,
-                    LinearCombination<N>,
-                    LinearCombination<N>,
-                )>,
-            >,
-        >,
+        nova_matrices: Option<Arc<Vec<Constraint<N>>>>,
     ) -> Self {
         ark_cs_ref.finalize();
         if nova_matrices.is_none() {
@@ -228,21 +220,16 @@ impl<N: novaPrimeField<Repr = Repr<32>>> StepCircuit<N> for FCircuit<N> {
     ) -> Result<Vec<AllocatedNum<N>>, bpSynthesisError> {
         // input already allocated in z
         assert_eq!(z.len(), self.input_assignments.len());
-
+        
         // alloc outputs
-        let alloc_out = self
-            .output_assignments
-            .iter()
-            .enumerate()
-            .map(|(i, v)| AllocatedNum::alloc(cs.namespace(|| format!("out {}", i)), || Ok(*v)))
-            .collect::<Result<Vec<AllocatedNum<N>>, bpSynthesisError>>()?;
+        let alloc_out = cs.alloc_batch(|| Ok(&self.output_assignments))?;
 
         // combine io
         let alloc_io = z
             .par_iter()
             .zip(alloc_out.par_iter())
             .flat_map(|(zi, oi)| [zi.clone(), oi.clone()])
-            .collect::<Vec<AllocatedNum<N>>>();
+            .collect::<Vec<_>>();
 
         // allocate all wits
         let alloc_wits = self
@@ -250,7 +237,7 @@ impl<N: novaPrimeField<Repr = Repr<32>>> StepCircuit<N> for FCircuit<N> {
             .iter()
             .enumerate()
             .map(|(i, w)| AllocatedNum::alloc(cs.namespace(|| format!("wit {}", i)), || Ok(*w)))
-            .collect::<Result<Vec<AllocatedNum<N>>, bpSynthesisError>>()?;
+            .collect::<Result<Vec<_>, bpSynthesisError>>()?;
 
         // add constraints
 

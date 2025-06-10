@@ -588,7 +588,6 @@ impl<F: arkPrimeField> MemBuilder<F> {
             priv_fs,
             &padding,
         );
-        println!("RAM HINTS {:#?}", ram_hints);
 
         let perm_chal = nova_to_ark_field::<N1, F>(&sample_challenge(&ic_cmt));
 
