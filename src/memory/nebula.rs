@@ -1108,10 +1108,15 @@ impl<F: arkPrimeField> RunningMem<F> {
 
         // t < ts (not for ROM)
         match ty {
-            MemType::PrivStack(_) | MemType::PrivRAM(_) | MemType::PrivROM(_) => {
+            MemType::PrivStack(_) | MemType::PrivRAM(_) | MemType::PubRAM(_) => {
                 let bit = custom_ge(&read_mem_elem.time, &ts, 32, w.cs.clone())?;
-                //cee_pack_l.push(bit.into());
-                //cee_pack_r.push(FpVar::one());
+                println!(
+                    "t {:#?} < ts {:#?}",
+                    read_mem_elem.time.value()?,
+                    ts.value()?
+                );
+                cee_pack_l.push(bit.into());
+                cee_pack_r.push(FpVar::one());
             }
             _ => {}
         };

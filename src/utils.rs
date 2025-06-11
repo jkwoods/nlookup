@@ -169,8 +169,8 @@ pub fn custom_ge<F: arkPrimeField>(
     max_bits: usize,
     cs: ConstraintSystemRef<F>,
 ) -> Result<Boolean<F>, SynthesisError> {
-    let max_val_fpv = FpVar::new_constant(cs.clone(), F::from(1u64 << max_bits))?;
-    let (bits, _) = (g - l + max_val_fpv).to_bits_le_with_top_bits_zero(max_bits)?;
+    let max_val_fpv = FpVar::new_constant(cs.clone(), F::from((1u64 << max_bits) + 1))?;
+    let (bits, _) = (g - l + max_val_fpv).to_bits_le_with_top_bits_zero(max_bits + 1)?;
     Ok(bits.last().unwrap().clone())
 }
 
