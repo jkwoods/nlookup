@@ -9,7 +9,8 @@ use ark_relations::gr1cs::{ConstraintSystemRef, SynthesisError};
 use nova_snark::traits::Engine;
 use rustc_hash::FxHashMap;
 
-pub trait arkPrimeField = PrimeField<BigInt = BigInteger256>;
+pub trait arkPrimeField: PrimeField<BigInt = BigInteger256> {}
+impl<P: PrimeField<BigInt = BigInteger256>>  arkPrimeField for P {}
 
 // we have to hardcode these, unfortunately
 pub(crate) type E1 = nova_snark::provider::Bn256EngineKZG;

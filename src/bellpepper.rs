@@ -15,7 +15,6 @@ use nova_snark::frontend::{
     num::AllocatedNum, ConstraintSystem, LinearCombination, SynthesisError as bpSynthesisError,
 };
 use nova_snark::traits::circuit::StepCircuit;
-use rayon::iter::ParallelBridge;
 use rayon::prelude::*;
 use std::sync::Arc;
 
@@ -37,6 +36,7 @@ pub trait AllocIoVar<V: ?Sized, A: arkField>: Sized + AllocVar<V, A> {
 impl<A: arkField> AllocIoVar<bool, A> for Boolean<A> {}
 impl<A: arkPrimeField> AllocIoVar<A, A> for FpVar<A> {}
 
+#[inline]
 pub fn ark_to_nova_field<
     A: arkPrimeField<BigInt = BigInteger256>,
     N: novaPrimeField<Repr = Repr<32>>,
@@ -50,12 +50,13 @@ pub fn ark_to_nova_field<
     let bytes = u64x4_to_u8x32(&b.0);
 
     // bytes -> nova F
-    N::from_repr(TryInto::<Repr<32>>::try_into(bytes).unwrap()).unwrap()
+    N::from_repr_vartime(Repr::from(bytes)).unwrap()
 }
 
+#[inline]
 fn u64x4_to_u8x32(input: &[u64; 4]) -> [u8; 32] {
     let mut output = [0u8; 32];
-    for (chunk, &val) in output.chunks_mut(8).zip(input) {
+    for (chunk, &val) in output.chunks_exact_mut(8).zip(input) {
         chunk.copy_from_slice(&val.to_le_bytes());
     }
     output
@@ -69,6 +70,7 @@ pub fn nova_to_ark_field<N: novaPrimeField<Repr = Repr<32>>, A: arkPrimeField>(n
     A::from_le_bytes_mod_order(b.inner())
 }
 
+#[inline]
 pub fn ark_to_u64<A: arkPrimeField<BigInt = BigInteger256>>(ark_ff: &A) -> u64 {
     // ark F -> ark BigInt
     let b = ark_ff.into_bigint();
@@ -82,11 +84,11 @@ pub fn ark_to_u64<A: arkPrimeField<BigInt = BigInteger256>>(ark_ff: &A) -> u64 {
     limbs[0]
 }
 
+#[inline]
 fn bellpepper_lc<N: novaPrimeField, CS: ConstraintSystem<N>>(
-    alloc_io: &Vec<AllocatedNum<N>>,
-    alloc_wits: &Vec<AllocatedNum<N>>,
+    alloc_io: &[AllocatedNum<N>],
+    alloc_wits: &[AllocatedNum<N>],
     lc: &Vec<(N, usize)>,
-    i: usize,
 ) -> LinearCombination<N> {
     let mut lc_bellpepper = LinearCombination::zero();
 
@@ -108,17 +110,19 @@ fn bellpepper_lc<N: novaPrimeField, CS: ConstraintSystem<N>>(
     lc_bellpepper
 }
 
+type Constraint<N> = (
+    LinearCombination<N>,
+    LinearCombination<N>,
+    LinearCombination<N>,
+);
+
+type LcUsize<N> = Vec<(N, usize)>;
+
 #[derive(Clone, Debug)]
 pub struct FCircuit<N: novaPrimeField<Repr = Repr<32>>> {
     pub lcs: Either<
-        Vec<(Vec<(N, usize)>, Vec<(N, usize)>, Vec<(N, usize)>)>,
-        Arc<
-            Vec<(
-                LinearCombination<N>,
-                LinearCombination<N>,
-                LinearCombination<N>,
-            )>,
-        >,
+        Vec<(LcUsize<N>, LcUsize<N>, LcUsize<N>)>,
+        Arc<Vec<Constraint<N>>>,
     >,
     wit_assignments: Vec<N>,
     input_assignments: Vec<N>,
@@ -131,15 +135,7 @@ impl<N: novaPrimeField<Repr = Repr<32>>> FCircuit<N> {
     // (i.e. a user should have never called new_input())
     pub fn new<A: arkPrimeField<BigInt = BigInteger256>>(
         ark_cs_ref: ConstraintSystemRef<A>,
-        nova_matrices: Option<
-            Arc<
-                Vec<(
-                    LinearCombination<N>,
-                    LinearCombination<N>,
-                    LinearCombination<N>,
-                )>,
-            >,
-        >,
+        nova_matrices: Option<Arc<Vec<Constraint<N>>>>,
     ) -> Self {
         ark_cs_ref.finalize();
         /*        if nova_matrices.is_none() {
@@ -156,24 +152,24 @@ impl<N: novaPrimeField<Repr = Repr<32>>> FCircuit<N> {
         let input_assignments = instance_assignment[1..]
             .par_iter()
             .step_by(2)
-            .map(|io| ark_to_nova_field(io))
+            .map(ark_to_nova_field)
             .collect();
 
         let output_assignments = instance_assignment[2..]
             .par_iter()
             .step_by(2)
-            .map(|io| ark_to_nova_field(io))
+            .map(ark_to_nova_field)
             .collect();
 
         let wit_assignments: Vec<N> = ark_cs
             .witness_assignment()
             .unwrap()
             .par_iter()
-            .map(|f| ark_to_nova_field(f))
+            .map(ark_to_nova_field)
             .collect();
 
-        let lcs = if nova_matrices.is_some() {
-            Either::Right(nova_matrices.unwrap())
+        let lcs = if let Some(nova_matrices) = nova_matrices {
+            Either::Right(nova_matrices)
         } else {
             let ark_matrices = &ark_cs.to_matrices().unwrap()[R1CS_PREDICATE_LABEL];
             let lcs = (0..ark_matrices[0].len())
@@ -181,15 +177,15 @@ impl<N: novaPrimeField<Repr = Repr<32>>> FCircuit<N> {
                 .map(|i| {
                     (
                         ark_matrices[0][i]
-                            .par_iter()
+                            .iter()
                             .map(|(val, index)| (ark_to_nova_field(val), *index))
                             .collect(),
                         ark_matrices[1][i]
-                            .par_iter()
+                            .iter()
                             .map(|(val, index)| (ark_to_nova_field(val), *index))
                             .collect(),
                         ark_matrices[2][i]
-                            .par_iter()
+                            .iter()
                             .map(|(val, index)| (ark_to_nova_field(val), *index))
                             .collect(),
                     )
@@ -228,50 +224,38 @@ impl<N: novaPrimeField<Repr = Repr<32>>> StepCircuit<N> for FCircuit<N> {
     ) -> Result<Vec<AllocatedNum<N>>, bpSynthesisError> {
         // input already allocated in z
         assert_eq!(z.len(), self.input_assignments.len());
-
+        
         // alloc outputs
-        let alloc_out = self
-            .output_assignments
-            .iter()
-            .enumerate()
-            .map(|(i, v)| AllocatedNum::alloc(cs.namespace(|| format!("out {}", i)), || Ok(*v)))
-            .collect::<Result<Vec<AllocatedNum<N>>, bpSynthesisError>>()?;
+        let alloc_out = AllocatedNum::alloc_batch(cs.namespace(|| "out"), || Ok(&self.output_assignments))?;
 
         // combine io
         let alloc_io = z
             .par_iter()
-            .zip(alloc_out.par_iter())
+            .zip(&alloc_out)
             .flat_map(|(zi, oi)| [zi.clone(), oi.clone()])
-            .collect::<Vec<AllocatedNum<N>>>();
+            .collect::<Vec<_>>();
 
         // allocate all wits
-        let alloc_wits = self
-            .wit_assignments
-            .iter()
-            .enumerate()
-            .map(|(i, w)| AllocatedNum::alloc(cs.namespace(|| format!("wit {}", i)), || Ok(*w)))
-            .collect::<Result<Vec<AllocatedNum<N>>, bpSynthesisError>>()?;
+        let alloc_wits = AllocatedNum::alloc_batch(&mut cs.namespace(|| "wit"), || Ok(&self.wit_assignments))?;
 
         // add constraints
 
-        self.lcs = match &self.lcs {
+        match &self.lcs {
             Either::Left(lcs) => {
-                let mut saved_lcs = Vec::new();
-
-                lcs.iter().enumerate().for_each(|(i, (a, b, c))| {
-                    let a_lc = bellpepper_lc::<N, CS>(&alloc_io, &alloc_wits, a, i);
-                    let b_lc = bellpepper_lc::<N, CS>(&alloc_io, &alloc_wits, b, i);
-                    let c_lc = bellpepper_lc::<N, CS>(&alloc_io, &alloc_wits, c, i);
-
-                    saved_lcs.push((a_lc.clone(), b_lc.clone(), c_lc.clone()));
-
-                    cs.enforce(|| format!("con{}", i), |_| a_lc, |_| b_lc, |_| c_lc);
-                });
-
-                Either::Right(Arc::new(saved_lcs))
+                let saved_lcs = lcs.iter().enumerate().map(|(i, (a, b, c))| {
+                    let a_lc = bellpepper_lc::<N, CS>(&alloc_io, &alloc_wits, a);
+                    let b_lc = bellpepper_lc::<N, CS>(&alloc_io, &alloc_wits, b);
+                    let c_lc = bellpepper_lc::<N, CS>(&alloc_io, &alloc_wits, c);
+                    if !cs.is_witness_generator() {
+                        cs.enforce(|| format!("con{i}"), |_| a_lc.clone(), |_| b_lc.clone(), |_| c_lc.clone());
+                    }
+                    (a_lc, b_lc, c_lc)
+                }).collect();
+                self.lcs = Either::Right(Arc::new(saved_lcs))
             }
             Either::Right(saved_lcs) => {
-                saved_lcs
+                if !cs.is_witness_generator() {
+                    saved_lcs
                     .iter()
                     .enumerate()
                     .for_each(|(i, (a_lc, b_lc, c_lc))| {
@@ -282,9 +266,9 @@ impl<N: novaPrimeField<Repr = Repr<32>>> StepCircuit<N> for FCircuit<N> {
                             |_| c_lc.clone(),
                         );
                     });
-                Either::Right(saved_lcs.clone())
+                }
             }
-        };
+        }
 
         Ok(alloc_out)
     }
