@@ -17,10 +17,10 @@ pub(crate) type E2 = nova_snark::provider::GrumpkinEngine;
 pub(crate) type N1 = <E1 as Engine>::Scalar;
 pub(crate) type N2 = <E2 as Engine>::Scalar;
 
-pub fn logmn(mn: usize) -> usize {
+pub fn logmn(mn: u64) -> u64 {
     match mn {
         1 => 1,
-        _ => (mn as f32).log2().ceil() as usize,
+        _ => (mn as f32).log2().ceil() as u64,
     }
 }
 
@@ -30,20 +30,20 @@ pub fn new_hash_map<K, V>() -> FxHashMap<K, V> {
 
 type ShiftPowers<F> = [FpVar<F>; 7];
 
-fn get_shift_powers<F: PrimeField>(
-    cs: &ConstraintSystemRef<F>,
-) -> ShiftPowers<F> {
+fn get_shift_powers<F: PrimeField>(cs: &ConstraintSystemRef<F>) -> ShiftPowers<F> {
     let cs = cs.borrow().unwrap();
     let mut map = cs.cache_map.borrow_mut();
-    let shift_powers = map.entry(TypeId::of::<ShiftPowers<F>>()).or_insert_with(|| {
-        let mut shift_powers = [(); 7].map(|_| FpVar::one());
-        let mut power = FpVar::constant(F::from(1u64 << 32));
-        for p in &mut shift_powers[1..] {
-            *p = power.clone();
-            power.square_in_place();
-        }
-        Box::new(shift_powers)
-    });
+    let shift_powers = map
+        .entry(TypeId::of::<ShiftPowers<F>>())
+        .or_insert_with(|| {
+            let mut shift_powers = [(); 7].map(|_| FpVar::one());
+            let mut power = FpVar::constant(F::from(1u64 << 32));
+            for p in &mut shift_powers[1..] {
+                *p = power.clone();
+                power.square_in_place();
+            }
+            Box::new(shift_powers)
+        });
     shift_powers
         .deref_mut()
         .downcast_mut::<ShiftPowers<F>>()
@@ -166,11 +166,11 @@ pub fn horners<F: PrimeField>(coeffs: &Vec<FpVar<F>>, x: &FpVar<F>) -> FpVar<F> 
 pub fn custom_ge<F: arkPrimeField>(
     l: &FpVar<F>,
     g: &FpVar<F>,
-    max_val: usize,
+    max_bits: usize,
     cs: ConstraintSystemRef<F>,
 ) -> Result<Boolean<F>, SynthesisError> {
-    let max_val_fpv = FpVar::new_constant(cs.clone(), F::from((max_val + 1) as u64))?;
-    let (bits, _) = (g - l + max_val_fpv).to_bits_le_with_top_bits_zero(logmn(max_val) + 1)?;
+    let max_val_fpv = FpVar::new_constant(cs.clone(), F::from(1u64 << max_bits))?;
+    let (bits, _) = (g - l + max_val_fpv).to_bits_le_with_top_bits_zero(max_bits)?;
     Ok(bits.last().unwrap().clone())
 }
 

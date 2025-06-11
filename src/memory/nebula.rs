@@ -854,7 +854,7 @@ impl<F: arkPrimeField> RunningMem<F> {
             cond,
             &w.stack_ptrs[stack_tag].clone(),
             Some(vals),
-            0,
+            MemType::PrivStack(stack_tag),
             &mut cee_pack_l,
             &mut cee_pack_r,
             w,
@@ -908,10 +908,10 @@ impl<F: arkPrimeField> RunningMem<F> {
         ty: MemType,
         w: &mut RunningMemWires<F>,
     ) -> Result<(MemElemWires<F>, MemElemWires<F>), SynthesisError> {
-        let mem_tag = match ty {
+        match ty {
             MemType::PrivStack(_) => panic!("cannot write to stack, only push"),
             MemType::PrivROM(_) | MemType::PubROM(_) => panic!("cannot write to ROM"),
-            m => self.mem_spaces.iter().position(|r| *r == m).unwrap() + 1,
+            _ => {}
         };
 
         let mut cee_pack_l = Vec::new();
@@ -921,7 +921,7 @@ impl<F: arkPrimeField> RunningMem<F> {
             cond,
             addr,
             Some(vals),
-            mem_tag,
+            ty,
             &mut cee_pack_l,
             &mut cee_pack_r,
             w,
@@ -989,7 +989,7 @@ impl<F: arkPrimeField> RunningMem<F> {
             cond,
             &w.stack_ptrs[stack_tag].clone(),
             None,
-            0,
+            MemType::PrivStack(stack_tag), // will always match? TODO
             &mut cee_pack_l,
             &mut cee_pack_r,
             w,
@@ -1021,23 +1021,15 @@ impl<F: arkPrimeField> RunningMem<F> {
         ty: MemType,
         w: &mut RunningMemWires<F>,
     ) -> Result<(MemElemWires<F>, MemElemWires<F>), SynthesisError> {
-        let mem_tag = match ty {
+        match ty {
             MemType::PrivStack(_) => panic!("cannot read from stack, only pop"),
-            m => self.mem_spaces.iter().position(|r| *r == m).unwrap() + 1,
+            _ => {}
         };
 
         let mut cee_pack_l = Vec::new();
         let mut cee_pack_r = Vec::new();
 
-        let res = self.conditional_op(
-            cond,
-            addr,
-            None,
-            mem_tag,
-            &mut cee_pack_l,
-            &mut cee_pack_r,
-            w,
-        )?;
+        let res = self.conditional_op(cond, addr, None, ty, &mut cee_pack_l, &mut cee_pack_r, w)?;
 
         chunk_cee(cond, &cee_pack_l, &cee_pack_r, w.cs.clone())?;
 
@@ -1068,7 +1060,7 @@ impl<F: arkPrimeField> RunningMem<F> {
         cond: &Boolean<F>,
         addr: &FpVar<F>,
         write_vals: Option<Vec<FpVar<F>>>,
-        mem_type: usize,
+        ty: MemType,
         cee_pack_l: &mut Vec<FpVar<F>>,
         cee_pack_r: &mut Vec<FpVar<F>>,
         w: &mut RunningMemWires<F>,
@@ -1090,9 +1082,6 @@ impl<F: arkPrimeField> RunningMem<F> {
             self.ts = w.ts_m1.value()?;
         }
 
-        // t < ts hacked in other part of code
-
-        // RS = RS * tup
         let read_wit = if self.dummy_mode || !cond.value()? {
             &MemElem {
                 time: F::zero(),
@@ -1116,6 +1105,18 @@ impl<F: arkPrimeField> RunningMem<F> {
                 .collect::<Result<Vec<FpVar<F>>, _>>()?,
             FpVar::new_witness(w.cs.clone(), || Ok(read_wit.sr))?,
         );
+
+        // t < ts (not for ROM)
+        match ty {
+            MemType::PrivStack(_) | MemType::PrivRAM(_) | MemType::PrivROM(_) => {
+                let bit = custom_ge(&read_mem_elem.time, &ts, 32, w.cs.clone())?;
+                //cee_pack_l.push(bit.into());
+                //cee_pack_r.push(FpVar::one());
+            }
+            _ => {}
+        };
+
+        // RS = RS * tup
         let next_running_rs = &w.running_rs * read_mem_elem.hash(w.cs.clone(), &w.perm_chal)?;
         w.running_rs = cond.select(&next_running_rs, &w.running_rs)?;
 
@@ -1124,6 +1125,10 @@ impl<F: arkPrimeField> RunningMem<F> {
             &FpVar::<F>::new_constant(w.cs.clone(), F::from(mem_type as u64))?,
             cond,
         )?;*/
+        let mem_type = match ty {
+            MemType::PrivStack(_) => 0,
+            m => self.mem_spaces.iter().position(|r| *r == m).unwrap() + 1,
+        };
         cee_pack_l.push(read_mem_elem.sr.clone());
         cee_pack_r.push(FpVar::constant(F::from(mem_type as u64)));
 
@@ -1194,7 +1199,6 @@ impl<F: arkPrimeField> RunningMem<F> {
                 )
             };
 
-            // t < ts hack
             // initial_mem_elem.time.enforce_equal(&FpVar::zero())?;
             eez_pack.push(initial_mem_elem.time.clone());
 
