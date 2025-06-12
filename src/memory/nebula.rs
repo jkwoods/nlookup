@@ -41,7 +41,7 @@ impl<F: ArkPrimeField> MemElem<F> {
             time: t,
             addr: a,
             vals: v,
-            sr: sr,
+            sr,
         }
     }
 
@@ -65,7 +65,7 @@ impl<F: ArkPrimeField> MemElem<F> {
         let mut hash = self.sr + F::from(1_u64 << 2) * self.time + F::from(1_u64 << 34) * self.addr;
 
         for i in 0..self.vals.len() {
-            hash = hash + (perm_chal[i + 1] * self.vals[i]);
+            hash += perm_chal[i + 1] * self.vals[i];
         }
 
         perm_chal[0] - hash
@@ -86,17 +86,17 @@ impl<F: ArkPrimeField> MemElemWires<F> {
             time: t,
             addr: a,
             vals: v,
-            sr: sr,
+            sr,
         }
     }
 
     pub fn assert_eq(&self, m: &MemElem<F>) {
-        assert_eq!(self.time.value().unwrap(), (*m).time);
-        assert_eq!(self.addr.value().unwrap(), (*m).addr);
+        assert_eq!(self.time.value().unwrap(), m.time);
+        assert_eq!(self.addr.value().unwrap(), m.addr);
         for j in 0..self.vals.len() {
-            assert_eq!(self.vals[j].value().unwrap(), (*m).vals[j]);
+            assert_eq!(self.vals[j].value().unwrap(), m.vals[j]);
         }
-        assert_eq!(self.sr.value().unwrap(), (*m).sr);
+        assert_eq!(self.sr.value().unwrap(), m.sr);
     }
 
     pub fn print_vals(&self) {
@@ -118,7 +118,7 @@ impl<F: ArkPrimeField> MemElemWires<F> {
             + FpVar::constant(F::from(1_u64 << 34)) * &self.addr;
 
         for i in 0..self.vals.len() {
-            hash = hash + (&perm_chal[i + 1] * &self.vals[i]);
+            hash += &perm_chal[i + 1] * &self.vals[i];
         }
 
         Ok(&perm_chal[0] - hash)
@@ -158,16 +158,15 @@ impl<F: ArkPrimeField> MemBuilder<F> {
         mem_spaces.sort();
         mem_spaces.dedup();
         for m in &mem_spaces {
-            match m {
-                MemType::PrivStack(_) => panic!("mem spaces is only for non stack mem"),
-                _ => {}
+            if let MemType::PrivStack(_) = m {
+                panic!("mem spaces is only for non stack mem")
             }
         }
 
         let mut stack_spaces = Vec::new();
         let mut stack_ptrs = Vec::new();
 
-        if stack_sizes.len() > 0 {
+        if !stack_sizes.is_empty() {
             stack_spaces.push(1);
             let mut stack_limit = 1;
 
@@ -179,7 +178,7 @@ impl<F: ArkPrimeField> MemBuilder<F> {
             }
         }
 
-        let mb = Self {
+        Self {
             mem: new_hash_map(),
             pub_is: Vec::new(),
             priv_is: Vec::new(),
@@ -192,9 +191,7 @@ impl<F: ArkPrimeField> MemBuilder<F> {
             elem_len,
             ts: 0,
             max_addr: 0,
-        };
-
-        mb
+        }
     }
 
     fn padding(&self, addr: usize) -> MemElem<F> {
@@ -237,9 +234,8 @@ impl<F: ArkPrimeField> MemBuilder<F> {
     }
 
     pub fn cond_read(&mut self, cond: bool, addr: usize, ty: MemType) -> Vec<F> {
-        match ty {
-            MemType::PrivStack(_) => panic!("cannot read from stack, only pop"),
-            _ => {}
+        if let MemType::PrivStack(_) = ty {
+            panic!("cannot read from stack, only pop")
         };
         self.inner_cond_read(cond, addr, ty)
     }
@@ -410,28 +406,24 @@ impl<F: ArkPrimeField> MemBuilder<F> {
                 let is_slice = if (i * scan_batch_size + scan_batch_size) <= self.priv_is.len() {
                     self.priv_is[(i * scan_batch_size)..(i * scan_batch_size + scan_batch_size)]
                         .to_vec()
-                } else {
-                    if (i * scan_batch_size) <= self.priv_is.len() {
-                        let mut is_slice = self.priv_is[(i * scan_batch_size)..].to_vec();
-                        is_slice.extend(vec![padding.clone(); scan_batch_size - is_slice.len()]);
+                } else if (i * scan_batch_size) <= self.priv_is.len() {
+                    let mut is_slice = self.priv_is[(i * scan_batch_size)..].to_vec();
+                    is_slice.extend(vec![padding.clone(); scan_batch_size - is_slice.len()]);
 
-                        is_slice
-                    } else {
-                        vec![padding.clone(); scan_batch_size]
-                    }
+                    is_slice
+                } else {
+                    vec![padding.clone(); scan_batch_size]
                 };
 
                 let fs_slice = if (i * scan_batch_size + scan_batch_size) <= priv_fs.len() {
                     priv_fs[(i * scan_batch_size)..(i * scan_batch_size + scan_batch_size)].to_vec()
-                } else {
-                    if (i * scan_batch_size) <= priv_fs.len() {
-                        let mut fs_slice = priv_fs[(i * scan_batch_size)..].to_vec();
-                        fs_slice.extend(vec![padding.clone(); scan_batch_size - fs_slice.len()]);
+                } else if (i * scan_batch_size) <= priv_fs.len() {
+                    let mut fs_slice = priv_fs[(i * scan_batch_size)..].to_vec();
+                    fs_slice.extend(vec![padding.clone(); scan_batch_size - fs_slice.len()]);
 
-                        fs_slice
-                    } else {
-                        vec![padding.clone(); scan_batch_size]
-                    }
+                    fs_slice
+                } else {
+                    vec![padding.clone(); scan_batch_size]
                 };
 
                 for im in is_slice {
@@ -552,7 +544,7 @@ impl<F: ArkPrimeField> MemBuilder<F> {
         path: P,
     ) -> (Vec<N2>, Vec<Vec<N1>>, Vec<Vec<N1>>, RunningMem<F>) {
         assert_eq!(self.rs.len(), self.ws.len());
-        assert!(self.rs.len() > 0);
+        assert!(!self.rs.is_empty());
         assert_eq!(self.rs.len() % rw_batch_size, 0); // assumes exact padding
         assert!(rw_batch_size > 0);
         let num_iters = self.rs.len() / rw_batch_size;
@@ -641,7 +633,7 @@ impl<F: ArkPrimeField> MemBuilder<F> {
 
         let mut chal_pow = perm_chal[1];
         for _ in 1..self.elem_len {
-            chal_pow = chal_pow * perm_chal[1];
+            chal_pow *= perm_chal[1];
             perm_chal.push(chal_pow);
         }
 
@@ -724,7 +716,7 @@ impl<F: ArkPrimeField> RunningMem<F> {
 
         let mut chal_pow = perm_chal[1];
         for _ in 1..self.elem_len {
-            chal_pow = chal_pow * perm_chal[1];
+            chal_pow *= perm_chal[1];
             perm_chal.push(chal_pow);
         }
 
@@ -734,7 +726,7 @@ impl<F: ArkPrimeField> RunningMem<F> {
             mem_wits,
             priv_fs: vec![self.padding.clone(); self.priv_fs.len()],
             pub_fs: self.pub_fs.clone(),
-            pub_hashes: self.pub_hashes.clone(),
+            pub_hashes: self.pub_hashes,
             ts: F::zero(),
             perm_chal,
             elem_len: self.elem_len,
@@ -768,7 +760,7 @@ impl<F: ArkPrimeField> RunningMem<F> {
     }
 
     pub fn get_starting_stack_ptrs(&self) -> Vec<F> {
-        if self.stack_spaces.len() == 0 {
+        if self.stack_spaces.is_empty() {
             vec![]
         } else {
             self.stack_spaces[..self.stack_spaces.len() - 1]
@@ -850,7 +842,7 @@ impl<F: ArkPrimeField> RunningMem<F> {
         vals: Vec<FpVar<F>>,
         w: &mut RunningMemWires<F>,
     ) -> Result<(MemElemWires<F>, MemElemWires<F>), SynthesisError> {
-        assert!(self.stack_spaces.len() > 0);
+        assert!(!self.stack_spaces.is_empty());
         assert_eq!(w.stack_ptrs.len(), self.stack_spaces.len() - 1);
         assert!(stack_tag < self.stack_spaces.len());
 
@@ -991,7 +983,7 @@ impl<F: ArkPrimeField> RunningMem<F> {
         stack_tag: usize, // which stack (0, 1, 2, etc)
         w: &mut RunningMemWires<F>,
     ) -> Result<(MemElemWires<F>, MemElemWires<F>), SynthesisError> {
-        assert!(self.stack_spaces.len() > 0);
+        assert!(!self.stack_spaces.is_empty());
         assert_eq!(w.stack_ptrs.len(), self.stack_spaces.len() - 1);
         assert!(stack_tag < self.stack_spaces.len());
 
@@ -1053,9 +1045,8 @@ impl<F: ArkPrimeField> RunningMem<F> {
         ty: MemType,
         w: &mut RunningMemWires<F>,
     ) -> Result<(MemElemWires<F>, MemElemWires<F>), SynthesisError> {
-        match ty {
-            MemType::PrivStack(_) => panic!("cannot read from stack, only pop"),
-            _ => {}
+        if let MemType::PrivStack(_) = ty {
+            panic!("cannot read from stack, only pop")
         };
 
         let mut cee_pack_l = Vec::new();

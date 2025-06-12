@@ -201,11 +201,11 @@ impl<N: NovaPrimeField<Repr = Repr<32>>> FCircuit<N> {
 
     // call this to get your first inputs to IVC
     pub fn get_zi(&self) -> &Vec<N> {
-        return &self.input_assignments;
+        &self.input_assignments
     }
 
     pub fn get_z_i_plus_1(&self) -> &Vec<N> {
-        return &self.output_assignments;
+        &self.output_assignments
     }
 }
 

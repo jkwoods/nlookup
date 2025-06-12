@@ -67,8 +67,8 @@ pub fn chunk_cee<F: ArkPrimeField>(
         .zip(r_vals.chunks(254u32.div_ceil(bits as u32) as usize))
     {
         let shift_powers = &shift_powers[..l_chunk.len()];
-        let l_pack = FpVar::inner_product(l_chunk, &shift_powers)?;
-        let r_pack = FpVar::inner_product(r_chunk, &shift_powers)?;
+        let l_pack = FpVar::inner_product(l_chunk, shift_powers)?;
+        let r_pack = FpVar::inner_product(r_chunk, shift_powers)?;
         l_pack.conditional_enforce_equal(&r_pack, cond)?;
     }
 
@@ -88,8 +88,8 @@ pub fn chunk_ee<F: ArkPrimeField>(
         .zip(r_vals.chunks(254u32.div_ceil(bits as u32) as usize))
     {
         let shift_powers = &shift_powers[..l_chunk.len()];
-        let l_pack = FpVar::inner_product(l_chunk, &shift_powers)?;
-        let r_pack = FpVar::inner_product(r_chunk, &shift_powers)?;
+        let l_pack = FpVar::inner_product(l_chunk, shift_powers)?;
+        let r_pack = FpVar::inner_product(r_chunk, shift_powers)?;
         l_pack.enforce_equal(&r_pack)?;
     }
     Ok(())
@@ -104,7 +104,7 @@ pub fn chunk_cee_zero<F: ArkPrimeField>(
     let shift_powers = get_shift_powers::<F>(&cs, bits);
     for l_chunk in l_vals.chunks(254u32.div_ceil(bits as u32) as usize) {
         let shift_powers = &shift_powers[..l_chunk.len()];
-        let l_pack = FpVar::inner_product(l_chunk, &shift_powers)?;
+        let l_pack = FpVar::inner_product(l_chunk, shift_powers)?;
         l_pack.conditional_enforce_equal(&FpVar::zero(), cond)?;
     }
     Ok(())
@@ -118,7 +118,7 @@ pub fn chunk_ee_zero<F: ArkPrimeField>(
     let shift_powers = get_shift_powers::<F>(&cs, bits);
     for l_chunk in l_vals.chunks(254u32.div_ceil(bits as u32) as usize) {
         let shift_powers = &shift_powers[..l_chunk.len()];
-        let l_pack = FpVar::inner_product(l_chunk, &shift_powers)?;
+        let l_pack = FpVar::inner_product(l_chunk, shift_powers)?;
         l_pack.enforce_equal(&FpVar::zero())?;
     }
     Ok(())
@@ -129,7 +129,6 @@ pub fn mle_eval<F: PrimeField>(table: &[F], x: &[F]) -> F {
     assert_eq!(chis.len(), table.len());
 
     (0..chis.len())
-        .into_iter()
         .map(|i| chis[i] * table[i])
         .reduce(|x, y| x + y)
         .unwrap()
@@ -168,7 +167,7 @@ pub fn horners<F: PrimeField>(coeffs: &Vec<FpVar<F>>, x: &FpVar<F>) -> FpVar<F> 
     }
 
     // constant
-    horners = horners + &coeffs[0];
+    horners += &coeffs[0];
 
     horners
 }
@@ -196,14 +195,14 @@ pub fn construct_poseidon_parameters_internal<F: PrimeField>(
     alpha: u64,
 ) -> Option<PoseidonConfig<F>> {
     let (ark, mds) =
-        find_poseidon_ark_and_mds(255, rate, full_rounds, partial_rounds, skip_matrices as u64);
+        find_poseidon_ark_and_mds(255, rate, full_rounds, partial_rounds, skip_matrices);
     Some(PoseidonConfig {
         full_rounds: full_rounds as usize,
         partial_rounds: partial_rounds as usize,
-        alpha: alpha,
+        alpha,
         ark,
         mds,
-        rate: rate,
+        rate,
         capacity: 1,
     })
 }
