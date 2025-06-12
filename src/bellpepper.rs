@@ -284,22 +284,13 @@ impl<N: novaPrimeField<Repr = Repr<32>>> StepCircuit<N> for FCircuit<N> {
 
 #[cfg(test)]
 mod tests {
-
     use crate::{bellpepper::*, utils::*};
     use ark_ff::{BigInt, One, Zero};
     use ark_r1cs_std::eq::EqGadget;
-    use ark_r1cs_std::GR1CSVar;
-    use ark_relations::{
-        gr1cs::{ConstraintSystem, OptimizationGoal, Variable},
-        lc,
-    };
-    use ff::PrimeField as novaPrimeField;
+    use ark_relations::gr1cs::ConstraintSystem;
     use nova_snark::{
         nova::{CompressedSNARK, PublicParams, RecursiveSNARK},
-        traits::{
-            circuit::TrivialCircuit, evaluation::EvaluationEngineTrait, snark::default_ck_hint,
-            Engine, Group,
-        },
+        traits::{snark::default_ck_hint, Engine, Group},
     };
     use rand::{rngs::OsRng, RngCore};
 
@@ -440,6 +431,7 @@ mod tests {
             &*default_ck_hint(),
             &*default_ck_hint(),
             vec![],
+            Some("./ci/ppot_0080_20.ptau"),
         )
         .unwrap();
 

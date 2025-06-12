@@ -9,8 +9,8 @@ use ark_relations::gr1cs::{ConstraintSystemRef, SynthesisError};
 use nova_snark::traits::Engine;
 use rustc_hash::FxHashMap;
 
-pub trait arkPrimeField: PrimeField<BigInt = BigInteger256> {}
-impl<P: PrimeField<BigInt = BigInteger256>> arkPrimeField for P {}
+pub trait ArkPrimeField: PrimeField<BigInt = BigInteger256> {}
+impl<P: PrimeField<BigInt = BigInteger256>> ArkPrimeField for P {}
 
 // we have to hardcode these, unfortunately
 pub(crate) type E1 = nova_snark::provider::Bn256EngineKZG;
@@ -53,7 +53,7 @@ fn get_shift_powers<F: PrimeField>(cs: &ConstraintSystemRef<F>, bits: usize) -> 
 }
 
 // from eli
-pub fn chunk_cee<F: arkPrimeField>(
+pub fn chunk_cee<F: ArkPrimeField>(
     cond: &Boolean<F>,
     l_vals: &[FpVar<F>],
     r_vals: &[FpVar<F>],
@@ -75,7 +75,7 @@ pub fn chunk_cee<F: arkPrimeField>(
     Ok(())
 }
 
-pub fn chunk_ee<F: arkPrimeField>(
+pub fn chunk_ee<F: ArkPrimeField>(
     l_vals: &Vec<FpVar<F>>,
     r_vals: &Vec<FpVar<F>>,
     bits: usize,
@@ -95,7 +95,7 @@ pub fn chunk_ee<F: arkPrimeField>(
     Ok(())
 }
 
-pub fn chunk_cee_zero<F: arkPrimeField>(
+pub fn chunk_cee_zero<F: ArkPrimeField>(
     cond: &Boolean<F>,
     l_vals: &Vec<FpVar<F>>,
     bits: usize,
@@ -110,7 +110,7 @@ pub fn chunk_cee_zero<F: arkPrimeField>(
     Ok(())
 }
 
-pub fn chunk_ee_zero<F: arkPrimeField>(
+pub fn chunk_ee_zero<F: ArkPrimeField>(
     l_vals: &Vec<FpVar<F>>,
     bits: usize,
     cs: ConstraintSystemRef<F>,
@@ -174,7 +174,7 @@ pub fn horners<F: PrimeField>(coeffs: &Vec<FpVar<F>>, x: &FpVar<F>) -> FpVar<F> 
 }
 
 // from Eli
-pub fn custom_ge<F: arkPrimeField>(
+pub fn custom_ge<F: ArkPrimeField>(
     l: &FpVar<F>,
     g: &FpVar<F>,
     max_bits: usize,

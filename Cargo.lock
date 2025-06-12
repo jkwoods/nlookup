@@ -847,6 +847,7 @@ dependencies = [
 [[package]]
 name = "nova-snark"
 version = "0.41.0"
+source = "git+https://github.com/jkwoods/Nova.git#fc87312f43ca05a77647b7ed44322b5224759fb1"
 dependencies = [
  "bincode",
  "bitvec",
