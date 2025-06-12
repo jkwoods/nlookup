@@ -61,7 +61,7 @@ impl<F: ArkPrimeField> MemElem<F> {
         v
     }
 
-    pub fn hash(&self, perm_chal: &Vec<F>) -> F {
+    pub fn hash(&self, perm_chal: &[F]) -> F {
         let mut hash = self.sr + F::from(1_u64 << 2) * self.time + F::from(1_u64 << 34) * self.addr;
 
         for i in 0..self.vals.len() {
@@ -112,7 +112,7 @@ impl<F: ArkPrimeField> MemElemWires<F> {
         );
     }
 
-    pub fn hash(&self, perm_chal: &Vec<FpVar<F>>) -> Result<FpVar<F>, SynthesisError> {
+    pub fn hash(&self, perm_chal: &[FpVar<F>]) -> Result<FpVar<F>, SynthesisError> {
         let mut hash = &self.sr
             + FpVar::constant(F::from(1_u64 << 2)) * &self.time
             + FpVar::constant(F::from(1_u64 << 34)) * &self.addr;
@@ -791,7 +791,7 @@ impl<F: ArkPrimeField> RunningMem<F> {
         running_rs: F,
         running_ws: F,
         running_fs: F,
-        stack_ptrs: &Vec<F>,
+        stack_ptrs: &[F],
     ) -> Result<RunningMemWires<F>, SynthesisError> {
         let running_i = FpVar::new_witness(cs.clone(), || Ok(running_i))?;
         let running_is = FpVar::new_witness(cs.clone(), || Ok(running_is))?;
@@ -1479,8 +1479,8 @@ mod tests {
     }
 
     pub fn ivcify_stack_op(
-        prev_ops: &Vec<MemElemWires<A>>,
-        next_ops: &Vec<MemElemWires<A>>,
+        prev_ops: &[MemElemWires<A>],
+        next_ops: &[MemElemWires<A>],
         cs: ConstraintSystemRef<A>,
     ) -> Result<(), SynthesisError> {
         assert_eq!(prev_ops.len(), next_ops.len());
@@ -1490,24 +1490,24 @@ mod tests {
             //println!("{:#?}", next_ops[i].time.value()?);
             let (_, time_out) = FpVar::new_input_output_pair(
                 cs.clone(),
-                || Ok(prev_ops[i].time.value()?),
-                || Ok(next_ops[i].time.value()?),
+                || prev_ops[i].time.value(),
+                || next_ops[i].time.value(),
             )?;
             next_ops[i].time.enforce_equal(&time_out)?;
 
             //println!("{:#?}", next_ops[i].addr.value()?);
             let (_, addr_out) = FpVar::new_input_output_pair(
                 cs.clone(),
-                || Ok(prev_ops[i].addr.value()?),
-                || Ok(next_ops[i].addr.value()?),
+                || prev_ops[i].addr.value(),
+                || next_ops[i].addr.value(),
             )?;
             next_ops[i].addr.enforce_equal(&addr_out)?;
 
             //println!("{:#?}", next_ops[i].sr.value()?);
             let (_, sr_out) = FpVar::new_input_output_pair(
                 cs.clone(),
-                || Ok(prev_ops[i].sr.value()?),
-                || Ok(next_ops[i].sr.value()?),
+                || prev_ops[i].sr.value(),
+                || next_ops[i].sr.value(),
             )?;
             next_ops[i].sr.enforce_equal(&sr_out)?;
 
@@ -1515,8 +1515,8 @@ mod tests {
                 //println!("{:#?}", next_ops[i].vals[j].value()?);
                 let (_, val_j_out) = FpVar::new_input_output_pair(
                     cs.clone(),
-                    || Ok(prev_ops[i].vals[j].value()?),
-                    || Ok(next_ops[i].vals[j].value()?),
+                    || prev_ops[i].vals[j].value(),
+                    || next_ops[i].vals[j].value(),
                 )?;
                 next_ops[i].vals[j].enforce_equal(&val_j_out)?;
             }

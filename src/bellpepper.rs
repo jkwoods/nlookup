@@ -306,7 +306,7 @@ mod tests {
 
     #[test]
     fn ff_convert() {
-        for v in vec![0, 1, 13, std::u64::MAX] {
+        for v in [0, 1, 13, u64::MAX] {
             let ark_val = AF::from(v);
             let nova_val: NS = ark_to_nova_field(&ark_val);
             assert_eq!(nova_val, NS::from(v));
@@ -322,7 +322,7 @@ mod tests {
 
     #[test]
     fn ff_reverse_convert() {
-        for v in vec![0, 1, 13, std::u64::MAX] {
+        for v in [0, 1, 13, u64::MAX] {
             let nova_val = NS::from(v);
             let ark_val: AF = nova_to_ark_field(&nova_val);
             assert_eq!(ark_val, AF::from(v));
@@ -364,7 +364,7 @@ mod tests {
     }
 
     fn make_circuit_1(
-        z_in: &Vec<AF>,
+        z_in: &[AF],
         saved_nova_matrices: Option<
             Arc<
                 Vec<(
@@ -378,8 +378,8 @@ mod tests {
         let cs = ConstraintSystem::<AF>::new_ref();
 
         let two = AF::one() + AF::one();
-        let a_val = z_in[0].clone();
-        let b_val = z_in[1].clone();
+        let a_val = z_in[0];
+        let b_val = z_in[1];
 
         let (a_in, a_out) =
             FpVar::new_input_output_pair(cs.clone(), || Ok(a_val), || Ok(a_val * two)).unwrap();
@@ -401,7 +401,7 @@ mod tests {
 
     fn run_nova(
         make_ark_circuit: fn(
-            &Vec<AF>,
+            &[AF],
             Option<
                 Arc<
                     Vec<(
@@ -422,7 +422,7 @@ mod tests {
             z0_primary,
             zi_list[0]
                 .iter()
-                .map(|f| ark_to_nova_field::<AF, NS>(f))
+                .map(ark_to_nova_field::<AF, NS>)
                 .collect::<Vec<NS>>()
         );
 
@@ -466,7 +466,7 @@ mod tests {
             zn_primary,
             zi_list[num_steps]
                 .iter()
-                .map(|f| ark_to_nova_field::<AF, NS>(f))
+                .map(ark_to_nova_field::<AF, NS>)
                 .collect::<Vec<NS>>()
         );
 
@@ -484,6 +484,6 @@ mod tests {
         let res = compressed_snark.verify(&vk, num_steps, &z0_primary);
         assert!(res.is_ok());
 
-        return zn_primary;
+        zn_primary
     }
 }

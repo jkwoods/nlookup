@@ -76,8 +76,8 @@ pub fn chunk_cee<F: ArkPrimeField>(
 }
 
 pub fn chunk_ee<F: ArkPrimeField>(
-    l_vals: &Vec<FpVar<F>>,
-    r_vals: &Vec<FpVar<F>>,
+    l_vals: &[FpVar<F>],
+    r_vals: &[FpVar<F>],
     bits: usize,
     cs: ConstraintSystemRef<F>,
 ) -> Result<(), SynthesisError> {
@@ -97,7 +97,7 @@ pub fn chunk_ee<F: ArkPrimeField>(
 
 pub fn chunk_cee_zero<F: ArkPrimeField>(
     cond: &Boolean<F>,
-    l_vals: &Vec<FpVar<F>>,
+    l_vals: &[FpVar<F>],
     bits: usize,
     cs: ConstraintSystemRef<F>,
 ) -> Result<(), SynthesisError> {
@@ -111,7 +111,7 @@ pub fn chunk_cee_zero<F: ArkPrimeField>(
 }
 
 pub fn chunk_ee_zero<F: ArkPrimeField>(
-    l_vals: &Vec<FpVar<F>>,
+    l_vals: &[FpVar<F>],
     bits: usize,
     cs: ConstraintSystemRef<F>,
 ) -> Result<(), SynthesisError> {
@@ -157,7 +157,7 @@ fn evals<F: PrimeField>(x: &[F]) -> Vec<F> {
     evals
 }
 
-pub fn horners<F: PrimeField>(coeffs: &Vec<FpVar<F>>, x: &FpVar<F>) -> FpVar<F> {
+pub fn horners<F: PrimeField>(coeffs: &[FpVar<F>], x: &FpVar<F>) -> FpVar<F> {
     let num_c = coeffs.len();
 
     let mut horners = x * &coeffs[num_c - 1];
