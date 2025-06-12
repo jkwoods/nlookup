@@ -281,29 +281,21 @@ impl<F: arkPrimeField> MemBuilder<F> {
         };
         self.rs.push(read_elem.clone());
 
-        //if cond {
-        //    self.ts += 1;
-        //assert!((self.ts as u64) < (1_u64 << 32));
-        //}
+        if cond {
+            self.ts += 1;
+            //assert!((self.ts as u64) < (1_u64 << 32));
+        }
 
         let write_elem = if !cond {
             self.padding(addr)
         } else {
-            let time = match ty {
-                MemType::PrivROM(_) | MemType::PubROM(_) => 0,
-                _ => {
-                    self.ts += 1;
-                    self.ts
-                }
-            };
-
             let mem_tag = match ty {
                 MemType::PrivStack(_) => 0,
                 m => self.mem_spaces.iter().position(|r| *r == m).unwrap() + 1,
             };
 
             let we = MemElem::new_f(
-                F::from(time as u64),
+                F::from(self.ts as u64),
                 F::from(addr as u64),
                 read_elem.vals.clone(),
                 F::from(mem_tag as u64),
@@ -641,7 +633,9 @@ impl<F: arkPrimeField> MemBuilder<F> {
 
         let sr_bit_limit = logmn(self.mem_spaces.len());
         let time_bit_limit = logmn(self.ts);
+        assert!(time_bit_limit <= 32);
         let addr_bit_limit = logmn(self.max_addr);
+        assert!(addr_bit_limit <= 254 - 34);
         let sp_bit_limit = match self.stack_spaces.last() {
             Some(s) => logmn(*s),
             _ => 0,
@@ -1144,25 +1138,21 @@ impl<F: arkPrimeField> RunningMem<F> {
         cee_pack_r: &mut Vec<FpVar<F>>,
         w: &mut RunningMemWires<F>,
     ) -> Result<(MemElemWires<F>, MemElemWires<F>), SynthesisError> {
-        let is_ro = ty.is_ro();
-
         // ts = ts + 1
         let ts = FpVar::new_witness(w.cs.clone(), || {
-            Ok(if cond.value()? && !is_ro {
+            Ok(if cond.value()? {
                 w.ts_m1.value()? + F::one()
             } else {
                 F::zero() //w.ts_m1.value()?
             })
         })?;
         //ts.conditional_enforce_equal(&(&w.ts_m1 + &FpVar::one()), &cond)?;
-        if !is_ro {
-            cee_pack_l.push(ts.clone());
-            cee_pack_r.push(&w.ts_m1 + &FpVar::one());
+        cee_pack_l.push(ts.clone());
+        cee_pack_r.push(&w.ts_m1 + &FpVar::one());
 
-            w.ts_m1 = cond.select(&ts, &w.ts_m1)?;
-            if cond.value()? {
-                self.ts = w.ts_m1.value()?;
-            }
+        w.ts_m1 = cond.select(&ts, &w.ts_m1)?;
+        if cond.value()? {
+            self.ts = w.ts_m1.value()?;
         }
 
         let read_wit = if self.dummy_mode || !cond.value()? {
