@@ -150,15 +150,6 @@ pub enum MemType {
     PubRAM(usize),
 }
 
-impl MemType {
-    fn is_ro(&self) -> bool {
-        match self {
-            MemType::PrivROM(_) | MemType::PubROM(_) => true,
-            _ => false,
-        }
-    }
-}
-
 // builds the witness for RunningMem
 #[derive(Debug)]
 pub struct MemBuilder<F: arkPrimeField> {
