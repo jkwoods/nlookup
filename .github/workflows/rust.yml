@@ -22,6 +22,8 @@ jobs:
         rustc --version
     - name: Build
       run: cargo build --verbose
+    - name: Get ppot
+      run: wget https://pse-trusted-setup-ppot.s3.eu-central-1.amazonaws.com/pot28_0080/ppot_0080_20.ptau
     - name: Run tests
       run: cargo test --verbose
     - name: Format
