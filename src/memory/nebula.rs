@@ -1,6 +1,5 @@
-use crate::bellpepper::{ark_to_nova_field, ark_to_u64, nova_to_ark_field};
+use crate::bellpepper::{ark_to_nova_field, nova_to_ark_field};
 use crate::utils::*;
-use ark_ff::{BigInteger256, PrimeField};
 use ark_r1cs_std::{
     alloc::AllocVar,
     boolean::Boolean,
@@ -8,25 +7,16 @@ use ark_r1cs_std::{
     fields::{fp::FpVar, FieldVar},
     GR1CSVar,
 };
-use ark_relations::{
-    gr1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisError, Variable},
-    lc, ns,
-};
-use ark_std::test_rng;
+use ark_relations::gr1cs::{ConstraintSystemRef, SynthesisError};
 use itertools::multiunzip;
 use nova_snark::{
     gadgets::utils::scalar_as_base,
     provider::{hyperkzg::Commitment, incremental::Incremental},
-    traits::{
-        commitment::{CommitmentEngineTrait, Len},
-        Engine, ROConstants, ROTrait,
-    },
+    traits::{Engine, ROConstants, ROTrait},
 };
 use rayon::prelude::*;
 use rustc_hash::FxHashMap as HashMap;
 use std::{cmp::max, path::Path};
-
-type CommitmentKey<E> = <<E as Engine>::CE as CommitmentEngineTrait<E>>::CommitmentKey;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct MemElem<F: ArkPrimeField> {
@@ -72,8 +62,7 @@ impl<F: ArkPrimeField> MemElem<F> {
     }
 
     pub fn hash(&self, perm_chal: &Vec<F>) -> F {
-        let mut hash =
-            (self.sr + F::from(1_u64 << 2) * self.time + F::from(1_u64 << 34) * self.addr);
+        let mut hash = self.sr + F::from(1_u64 << 2) * self.time + F::from(1_u64 << 34) * self.addr;
 
         for i in 0..self.vals.len() {
             hash = hash + (perm_chal[i + 1] * self.vals[i]);
@@ -111,7 +100,6 @@ impl<F: ArkPrimeField> MemElemWires<F> {
     }
 
     pub fn print_vals(&self) {
-        let sr_val = self.sr.value().unwrap();
         println!(
             "MemElem [{:#?} [time {:#?}] [addr {:#?}] [vals {:#?}]]",
             self.sr.value().unwrap(), //self.mem_spaces[ark_to_u64(&self.sr.value().unwrap())]
@@ -124,14 +112,10 @@ impl<F: ArkPrimeField> MemElemWires<F> {
         );
     }
 
-    pub fn hash(
-        &self,
-        cs: ConstraintSystemRef<F>,
-        perm_chal: &Vec<FpVar<F>>,
-    ) -> Result<FpVar<F>, SynthesisError> {
-        let mut hash = (&self.sr
+    pub fn hash(&self, perm_chal: &Vec<FpVar<F>>) -> Result<FpVar<F>, SynthesisError> {
+        let mut hash = &self.sr
             + FpVar::constant(F::from(1_u64 << 2)) * &self.time
-            + FpVar::constant(F::from(1_u64 << 34)) * &self.addr);
+            + FpVar::constant(F::from(1_u64 << 34)) * &self.addr;
 
         for i in 0..self.vals.len() {
             hash = hash + (&perm_chal[i + 1] * &self.vals[i]);
@@ -187,7 +171,7 @@ impl<F: ArkPrimeField> MemBuilder<F> {
             stack_spaces.push(1);
             let mut stack_limit = 1;
 
-            for (i, s) in stack_sizes.iter().enumerate() {
+            for s in stack_sizes.iter() {
                 stack_ptrs.push(stack_limit);
                 stack_limit += s;
                 //assert!((stack_limit as u64) < (1_u64 << 32));
@@ -438,8 +422,7 @@ impl<F: ArkPrimeField> MemBuilder<F> {
                 };
 
                 let fs_slice = if (i * scan_batch_size + scan_batch_size) <= priv_fs.len() {
-                    (priv_fs[(i * scan_batch_size)..(i * scan_batch_size + scan_batch_size)]
-                        .to_vec())
+                    priv_fs[(i * scan_batch_size)..(i * scan_batch_size + scan_batch_size)].to_vec()
                 } else {
                     if (i * scan_batch_size) <= priv_fs.len() {
                         let mut fs_slice = priv_fs[(i * scan_batch_size)..].to_vec();
@@ -447,7 +430,7 @@ impl<F: ArkPrimeField> MemBuilder<F> {
 
                         fs_slice
                     } else {
-                        (vec![padding.clone(); scan_batch_size])
+                        vec![padding.clone(); scan_batch_size]
                     }
                 };
 
@@ -657,7 +640,7 @@ impl<F: ArkPrimeField> MemBuilder<F> {
         ];
 
         let mut chal_pow = perm_chal[1];
-        for c in 1..self.elem_len {
+        for _ in 1..self.elem_len {
             chal_pow = chal_pow * perm_chal[1];
             perm_chal.push(chal_pow);
         }
@@ -687,11 +670,6 @@ impl<F: ArkPrimeField> MemBuilder<F> {
         rm.pub_hashes = rm.get_pub_is_fs_hashes();
 
         (ic_cmt, blinds, ram_hints, rm)
-    }
-
-    // should only be used for testing
-    pub(crate) fn get_mem_wits(&self) -> &HashMap<usize, MemElem<F>> {
-        &self.mem
     }
 }
 
@@ -736,7 +714,7 @@ pub struct RunningMemWires<F: ArkPrimeField> {
 
 impl<F: ArkPrimeField> RunningMem<F> {
     pub fn get_dummy(&self, ic_cmt: &Vec<N2>) -> Self {
-        let mut mem_wits = new_hash_map();
+        let mem_wits = new_hash_map();
 
         let nova_perm_chal = sample_challenges(ic_cmt);
         let mut perm_chal = vec![
@@ -745,7 +723,7 @@ impl<F: ArkPrimeField> RunningMem<F> {
         ];
 
         let mut chal_pow = perm_chal[1];
-        for c in 1..self.elem_len {
+        for _ in 1..self.elem_len {
             chal_pow = chal_pow * perm_chal[1];
             perm_chal.push(chal_pow);
         }
@@ -813,11 +791,6 @@ impl<F: ArkPrimeField> RunningMem<F> {
         ))
     }
 
-    // should only be used for testing
-    pub(crate) fn get_mem_wits(&self) -> &HashMap<F, MemElem<F>> {
-        &self.mem_wits
-    }
-
     pub fn begin_new_circuit(
         &mut self,
         cs: ConstraintSystemRef<F>,
@@ -839,7 +812,7 @@ impl<F: ArkPrimeField> RunningMem<F> {
             FpVar::new_witness(cs.clone(), || Ok(self.perm_chal[1]))?,
         ];
         let mut chal_pow = perm_chal[1].clone();
-        for i in 1..self.elem_len {
+        for _ in 1..self.elem_len {
             chal_pow = &chal_pow * &perm_chal[1];
             perm_chal.push(chal_pow.clone());
         }
@@ -1182,7 +1155,7 @@ impl<F: ArkPrimeField> RunningMem<F> {
         };
 
         // RS = RS * tup
-        let next_running_rs = &w.running_rs * read_mem_elem.hash(w.cs.clone(), &w.perm_chal)?;
+        let next_running_rs = &w.running_rs * read_mem_elem.hash(&w.perm_chal)?;
         w.running_rs = cond.select(&next_running_rs, &w.running_rs)?;
 
         // memory namespace
@@ -1222,7 +1195,7 @@ impl<F: ArkPrimeField> RunningMem<F> {
         // WS = WS * tup
         // write mem elem sr == read mem elem sr (important to perserve this wire)
         let write_mem_elem = MemElemWires::new(ts, addr.clone(), v_prime, read_mem_elem.sr.clone());
-        let next_running_ws = &w.running_ws * write_mem_elem.hash(w.cs.clone(), &w.perm_chal)?;
+        let next_running_ws = &w.running_ws * write_mem_elem.hash(&w.perm_chal)?;
         w.running_ws = cond.select(&next_running_ws, &w.running_ws)?;
 
         Ok((read_mem_elem, write_mem_elem))
@@ -1268,8 +1241,7 @@ impl<F: ArkPrimeField> RunningMem<F> {
             eez_pack.push(initial_mem_elem.time.clone());
 
             // IS check
-            let next_running_is =
-                &w.running_is * initial_mem_elem.hash(w.cs.clone(), &w.perm_chal)?;
+            let next_running_is = &w.running_is * initial_mem_elem.hash(&w.perm_chal)?;
             w.running_is = cond.select(&next_running_is, &w.running_is)?;
 
             let (final_mem_elem, cond) = if self.s < self.priv_fs.len() {
@@ -1295,8 +1267,7 @@ impl<F: ArkPrimeField> RunningMem<F> {
             };
 
             // FS check
-            let next_running_fs =
-                &w.running_fs * final_mem_elem.hash(w.cs.clone(), &w.perm_chal)?;
+            let next_running_fs = &w.running_fs * final_mem_elem.hash(&w.perm_chal)?;
             w.running_fs = cond.select(&next_running_fs, &w.running_fs)?;
 
             // a = a' = i
@@ -1319,9 +1290,9 @@ impl<F: ArkPrimeField> RunningMem<F> {
 
         // final check
         let last_check = Boolean::new_witness(w.cs.clone(), || Ok(last_round))?;
-        &(&w.running_is * &w.running_ws * &FpVar::constant(self.pub_hashes.0))
-            .is_eq(&(&w.running_fs * &w.running_rs * &FpVar::constant(self.pub_hashes.1)))?
-            .conditional_enforce_equal(&Boolean::TRUE, &last_check)?;
+        let union = &(&w.running_is * &w.running_ws * &FpVar::constant(self.pub_hashes.0))
+            .is_eq(&(&w.running_fs * &w.running_rs * &FpVar::constant(self.pub_hashes.1)))?;
+        union.conditional_enforce_equal(&Boolean::TRUE, &last_check)?;
 
         w.running_is = last_check.select(&FpVar::constant(F::zero()), &w.running_is)?;
         w.running_rs = last_check.select(&FpVar::zero(), &w.running_rs)?;
@@ -1355,22 +1326,19 @@ pub fn sample_challenges(ic_cmts: &Vec<N2>) -> [N1; 2] {
     ] // num hash bits from nova
 }
 
+#[cfg(test)]
 mod tests {
     use crate::bellpepper::*;
     use crate::memory::nebula::*;
-    use crate::utils::*;
     use ark_ff::{One, Zero};
-    use ff::Field as novaField;
-    use ff::PrimeField as novaPrimeField;
+    use ark_relations::gr1cs::{ConstraintSystem, OptimizationGoal};
     use nova_snark::{
         nova::{CompressedSNARK, PublicParams, RandomLayer, RecursiveSNARK},
-        traits::{circuit::TrivialCircuit, snark::default_ck_hint, Engine},
+        traits::{snark::default_ck_hint, Engine},
     };
 
-    #[cfg(test)]
     type A = ark_bn254::Fr;
 
-    #[cfg(test)]
     fn make_full_mem_circ(
         i: usize,
         rm: &mut RunningMem<A>,
@@ -1493,7 +1461,7 @@ mod tests {
             .enforce_equal(&running_mem_wires.running_i)
             .unwrap();
         // last
-        let (last_in, last_out) = Boolean::new_input_output_pair(
+        let (_, last_out) = Boolean::new_input_output_pair(
             cs.clone(),
             || Ok(last_check.value().unwrap()),
             || Ok(last_check.value().unwrap()),
@@ -1519,7 +1487,6 @@ mod tests {
         FCircuit::new(cs, None)
     }
 
-    #[cfg(test)]
     pub fn ivcify_stack_op(
         prev_ops: &Vec<MemElemWires<A>>,
         next_ops: &Vec<MemElemWires<A>>,
@@ -1530,7 +1497,7 @@ mod tests {
         for i in 0..prev_ops.len() {
             //println!("IVC OP");
             //println!("{:#?}", next_ops[i].time.value()?);
-            let (time_in, time_out) = FpVar::new_input_output_pair(
+            let (_, time_out) = FpVar::new_input_output_pair(
                 cs.clone(),
                 || Ok(prev_ops[i].time.value()?),
                 || Ok(next_ops[i].time.value()?),
@@ -1538,7 +1505,7 @@ mod tests {
             next_ops[i].time.enforce_equal(&time_out)?;
 
             //println!("{:#?}", next_ops[i].addr.value()?);
-            let (addr_in, addr_out) = FpVar::new_input_output_pair(
+            let (_, addr_out) = FpVar::new_input_output_pair(
                 cs.clone(),
                 || Ok(prev_ops[i].addr.value()?),
                 || Ok(next_ops[i].addr.value()?),
@@ -1546,7 +1513,7 @@ mod tests {
             next_ops[i].addr.enforce_equal(&addr_out)?;
 
             //println!("{:#?}", next_ops[i].sr.value()?);
-            let (sr_in, sr_out) = FpVar::new_input_output_pair(
+            let (_, sr_out) = FpVar::new_input_output_pair(
                 cs.clone(),
                 || Ok(prev_ops[i].sr.value()?),
                 || Ok(next_ops[i].sr.value()?),
@@ -1555,7 +1522,7 @@ mod tests {
 
             for j in 0..prev_ops[i].vals.len() {
                 //println!("{:#?}", next_ops[i].vals[j].value()?);
-                let (val_j_in, val_j_out) = FpVar::new_input_output_pair(
+                let (_, val_j_out) = FpVar::new_input_output_pair(
                     cs.clone(),
                     || Ok(prev_ops[i].vals[j].value()?),
                     || Ok(next_ops[i].vals[j].value()?),
@@ -1566,7 +1533,6 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(test)]
     fn run_ram_nova(
         num_iters: usize,
         batch_size: usize,
@@ -1646,7 +1612,6 @@ mod tests {
             assert!(res.is_ok());
             res.unwrap();
 
-            let zi_primary = circuit_primary.get_zi();
             // verify the recursive SNARK
             let res = recursive_snark.verify(&pp, i + 1, &z0_primary);
             assert!(res.is_ok());
@@ -1730,7 +1695,6 @@ mod tests {
         run_ram_nova(2, 3, mb, two_stacks_circ);
     }
 
-    #[cfg(test)]
     fn two_stacks_circ(
         i: usize,
         rm: &mut RunningMem<A>,
@@ -1801,7 +1765,6 @@ mod tests {
         run_ram_nova(2, 4, mb, stack_ends_empty_circ);
     }
 
-    #[cfg(test)]
     fn stack_ends_empty_circ(
         i: usize,
         rm: &mut RunningMem<A>,
@@ -1872,7 +1835,6 @@ mod tests {
         run_ram_nova(2, 3, mb, stack_basic_circ);
     }
 
-    #[cfg(test)]
     fn stack_basic_circ(
         i: usize,
         rm: &mut RunningMem<A>,
@@ -1937,9 +1899,8 @@ mod tests {
         run_ram_nova(2, 1, mb, mem_cond_simple_circ);
     }
 
-    #[cfg(test)]
     fn mem_cond_simple_circ(
-        i: usize,
+        _i: usize,
         rm: &mut RunningMem<A>,
         rmw: &mut RunningMemWires<A>,
         rw_mem_ops: &mut Vec<MemElemWires<A>>,
@@ -1948,7 +1909,8 @@ mod tests {
 
         let cond = Boolean::new_witness(rmw.cs.clone(), || Ok(cond_value)).unwrap();
 
-        let res = rm.read(
+        let res = rm.conditional_read(
+            &cond,
             &FpVar::new_witness(rmw.cs.clone(), || Ok(A::from(read_addr as u64))).unwrap(),
             MemType::PrivRAM(0),
             rmw,
@@ -1991,7 +1953,6 @@ mod tests {
         run_ram_nova(3, 2, mb, mem_conditional_circ);
     }
 
-    #[cfg(test)]
     fn mem_conditional_circ(
         i: usize,
         rm: &mut RunningMem<A>,
@@ -2090,7 +2051,6 @@ mod tests {
         run_ram_nova(2, 2, mb, mem_pub_rom_circ);
     }
 
-    #[cfg(test)]
     fn mem_pub_rom_circ(
         i: usize,
         rm: &mut RunningMem<A>,
@@ -2149,7 +2109,6 @@ mod tests {
         run_ram_nova(2, 2, mb, mem_basic_circ);
     }
 
-    #[cfg(test)]
     fn mem_basic_circ(
         i: usize,
         rm: &mut RunningMem<A>,
@@ -2203,7 +2162,6 @@ mod tests {
         run_ram_nova(2, 1, mb, mem_bigger_init_circ);
     }
 
-    #[cfg(test)]
     fn mem_bigger_init_circ(
         i: usize,
         rm: &mut RunningMem<A>,

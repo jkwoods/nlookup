@@ -41,7 +41,7 @@ fn get_shift_powers<F: PrimeField>(cs: &ConstraintSystemRef<F>, bits: usize) -> 
             let mut power = FpVar::constant(F::from(1u64 << bits));
             for p in &mut shift_powers[1..] {
                 *p = power.clone();
-                power.square_in_place();
+                power.square_in_place().unwrap();
             }
             Box::new(shift_powers)
         });
