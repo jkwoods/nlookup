@@ -1,14 +1,14 @@
-use ark_ff::{BigInteger, BigInteger256, Field as arkField, PrimeField as arkPrimeField};
+use ark_ff::{BigInteger256, Field as arkField, PrimeField as ArkPrimeField};
 use ark_r1cs_std::{
     alloc::{AllocVar, AllocationMode},
     boolean::Boolean,
-    fields::{fp::FpVar, FieldVar},
+    fields::fp::FpVar,
 };
 use ark_relations::gr1cs::{
     ConstraintSystemRef, Namespace, SynthesisError as arkSynthesisError, R1CS_PREDICATE_LABEL,
 };
 use core::borrow::Borrow;
-use ff::{Field as novaField, PrimeField as novaPrimeField};
+use ff::PrimeField as NovaPrimeField;
 use halo2curves::serde::Repr;
 use itertools::Either;
 use nova_snark::frontend::{
@@ -34,12 +34,12 @@ pub trait AllocIoVar<V: ?Sized, A: arkField>: Sized + AllocVar<V, A> {
 }
 
 impl<A: arkField> AllocIoVar<bool, A> for Boolean<A> {}
-impl<A: arkPrimeField> AllocIoVar<A, A> for FpVar<A> {}
+impl<A: ArkPrimeField> AllocIoVar<A, A> for FpVar<A> {}
 
 #[inline]
 pub fn ark_to_nova_field<
-    A: arkPrimeField<BigInt = BigInteger256>,
-    N: novaPrimeField<Repr = Repr<32>>,
+    A: ArkPrimeField<BigInt = BigInteger256>,
+    N: NovaPrimeField<Repr = Repr<32>>,
 >(
     ark_ff: &A,
 ) -> N {
@@ -62,7 +62,7 @@ fn u64x4_to_u8x32(input: &[u64; 4]) -> [u8; 32] {
     output
 }
 
-pub fn nova_to_ark_field<N: novaPrimeField<Repr = Repr<32>>, A: arkPrimeField>(nova_ff: &N) -> A {
+pub fn nova_to_ark_field<N: NovaPrimeField<Repr = Repr<32>>, A: ArkPrimeField>(nova_ff: &N) -> A {
     // nova F -> bytes
     let b = nova_ff.to_repr();
 
@@ -71,7 +71,7 @@ pub fn nova_to_ark_field<N: novaPrimeField<Repr = Repr<32>>, A: arkPrimeField>(n
 }
 
 #[inline]
-pub fn ark_to_u64<A: arkPrimeField<BigInt = BigInteger256>>(ark_ff: &A) -> u64 {
+pub fn ark_to_u64<A: ArkPrimeField<BigInt = BigInteger256>>(ark_ff: &A) -> u64 {
     // ark F -> ark BigInt
     let b = ark_ff.into_bigint();
 
@@ -85,7 +85,7 @@ pub fn ark_to_u64<A: arkPrimeField<BigInt = BigInteger256>>(ark_ff: &A) -> u64 {
 }
 
 #[inline]
-fn bellpepper_lc<N: novaPrimeField, CS: ConstraintSystem<N>>(
+fn bellpepper_lc<N: NovaPrimeField, CS: ConstraintSystem<N>>(
     alloc_io: &[AllocatedNum<N>],
     alloc_wits: &[AllocatedNum<N>],
     lc: &Vec<(N, usize)>,
@@ -119,21 +119,18 @@ type Constraint<N> = (
 type LcUsize<N> = Vec<(N, usize)>;
 
 #[derive(Clone, Debug)]
-pub struct FCircuit<N: novaPrimeField<Repr = Repr<32>>> {
-    pub lcs: Either<
-        Vec<(LcUsize<N>, LcUsize<N>, LcUsize<N>)>,
-        Arc<Vec<Constraint<N>>>,
-    >,
+pub struct FCircuit<N: NovaPrimeField<Repr = Repr<32>>> {
+    pub lcs: Either<Vec<(LcUsize<N>, LcUsize<N>, LcUsize<N>)>, Arc<Vec<Constraint<N>>>>,
     wit_assignments: Vec<N>,
     input_assignments: Vec<N>,
     output_assignments: Vec<N>,
 }
 
-impl<N: novaPrimeField<Repr = Repr<32>>> FCircuit<N> {
+impl<N: NovaPrimeField<Repr = Repr<32>>> FCircuit<N> {
     // make circuits and witnesses for round i
     // the ark_cs should only have witness and input/output PAIRs
     // (i.e. a user should have never called new_input())
-    pub fn new<A: arkPrimeField<BigInt = BigInteger256>>(
+    pub fn new<A: ArkPrimeField<BigInt = BigInteger256>>(
         ark_cs_ref: ConstraintSystemRef<A>,
         nova_matrices: Option<Arc<Vec<Constraint<N>>>>,
     ) -> Self {
@@ -204,15 +201,15 @@ impl<N: novaPrimeField<Repr = Repr<32>>> FCircuit<N> {
 
     // call this to get your first inputs to IVC
     pub fn get_zi(&self) -> &Vec<N> {
-        return &self.input_assignments;
+        &self.input_assignments
     }
 
     pub fn get_z_i_plus_1(&self) -> &Vec<N> {
-        return &self.output_assignments;
+        &self.output_assignments
     }
 }
 
-impl<N: novaPrimeField<Repr = Repr<32>>> StepCircuit<N> for FCircuit<N> {
+impl<N: NovaPrimeField<Repr = Repr<32>>> StepCircuit<N> for FCircuit<N> {
     fn arity(&self) -> usize {
         self.output_assignments.len()
     }
@@ -224,9 +221,10 @@ impl<N: novaPrimeField<Repr = Repr<32>>> StepCircuit<N> for FCircuit<N> {
     ) -> Result<Vec<AllocatedNum<N>>, bpSynthesisError> {
         // input already allocated in z
         assert_eq!(z.len(), self.input_assignments.len());
-        
+
         // alloc outputs
-        let alloc_out = AllocatedNum::alloc_batch(cs.namespace(|| "out"), || Ok(&self.output_assignments))?;
+        let alloc_out =
+            AllocatedNum::alloc_batch(cs.namespace(|| "out"), || Ok(&self.output_assignments))?;
 
         // combine io
         let alloc_io = z
@@ -236,36 +234,46 @@ impl<N: novaPrimeField<Repr = Repr<32>>> StepCircuit<N> for FCircuit<N> {
             .collect::<Vec<_>>();
 
         // allocate all wits
-        let alloc_wits = AllocatedNum::alloc_batch(&mut cs.namespace(|| "wit"), || Ok(&self.wit_assignments))?;
+        let alloc_wits =
+            AllocatedNum::alloc_batch(&mut cs.namespace(|| "wit"), || Ok(&self.wit_assignments))?;
 
         // add constraints
 
         match &self.lcs {
             Either::Left(lcs) => {
-                let saved_lcs = lcs.iter().enumerate().map(|(i, (a, b, c))| {
-                    let a_lc = bellpepper_lc::<N, CS>(&alloc_io, &alloc_wits, a);
-                    let b_lc = bellpepper_lc::<N, CS>(&alloc_io, &alloc_wits, b);
-                    let c_lc = bellpepper_lc::<N, CS>(&alloc_io, &alloc_wits, c);
-                    if !cs.is_witness_generator() {
-                        cs.enforce(|| format!("con{i}"), |_| a_lc.clone(), |_| b_lc.clone(), |_| c_lc.clone());
-                    }
-                    (a_lc, b_lc, c_lc)
-                }).collect();
+                let saved_lcs = lcs
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (a, b, c))| {
+                        let a_lc = bellpepper_lc::<N, CS>(&alloc_io, &alloc_wits, a);
+                        let b_lc = bellpepper_lc::<N, CS>(&alloc_io, &alloc_wits, b);
+                        let c_lc = bellpepper_lc::<N, CS>(&alloc_io, &alloc_wits, c);
+                        if !cs.is_witness_generator() {
+                            cs.enforce(
+                                || format!("con{i}"),
+                                |_| a_lc.clone(),
+                                |_| b_lc.clone(),
+                                |_| c_lc.clone(),
+                            );
+                        }
+                        (a_lc, b_lc, c_lc)
+                    })
+                    .collect();
                 self.lcs = Either::Right(Arc::new(saved_lcs))
             }
             Either::Right(saved_lcs) => {
                 if !cs.is_witness_generator() {
                     saved_lcs
-                    .iter()
-                    .enumerate()
-                    .for_each(|(i, (a_lc, b_lc, c_lc))| {
-                        cs.enforce(
-                            || format!("con{}", i),
-                            |_| a_lc.clone(),
-                            |_| b_lc.clone(),
-                            |_| c_lc.clone(),
-                        );
-                    });
+                        .iter()
+                        .enumerate()
+                        .for_each(|(i, (a_lc, b_lc, c_lc))| {
+                            cs.enforce(
+                                || format!("con{}", i),
+                                |_| a_lc.clone(),
+                                |_| b_lc.clone(),
+                                |_| c_lc.clone(),
+                            );
+                        });
                 }
             }
         }
@@ -276,22 +284,14 @@ impl<N: novaPrimeField<Repr = Repr<32>>> StepCircuit<N> for FCircuit<N> {
 
 #[cfg(test)]
 mod tests {
-
     use crate::{bellpepper::*, utils::*};
-    use ark_ff::{BigInt, One, Zero};
+    use ark_ff::{BigInt, BigInteger, One, Zero};
     use ark_r1cs_std::eq::EqGadget;
-    use ark_r1cs_std::GR1CSVar;
-    use ark_relations::{
-        gr1cs::{ConstraintSystem, OptimizationGoal, Variable},
-        lc,
-    };
-    use ff::PrimeField as novaPrimeField;
+    use ark_relations::gr1cs::ConstraintSystem;
+    use ff::Field as NovaField;
     use nova_snark::{
         nova::{CompressedSNARK, PublicParams, RecursiveSNARK},
-        traits::{
-            circuit::TrivialCircuit, evaluation::EvaluationEngineTrait, snark::default_ck_hint,
-            Engine, Group,
-        },
+        traits::{snark::default_ck_hint, Engine, Group},
     };
     use rand::{rngs::OsRng, RngCore};
 
@@ -306,7 +306,7 @@ mod tests {
 
     #[test]
     fn ff_convert() {
-        for v in vec![0, 1, 13, std::u64::MAX] {
+        for v in [0, 1, 13, u64::MAX] {
             let ark_val = AF::from(v);
             let nova_val: NS = ark_to_nova_field(&ark_val);
             assert_eq!(nova_val, NS::from(v));
@@ -322,7 +322,7 @@ mod tests {
 
     #[test]
     fn ff_reverse_convert() {
-        for v in vec![0, 1, 13, std::u64::MAX] {
+        for v in [0, 1, 13, u64::MAX] {
             let nova_val = NS::from(v);
             let ark_val: AF = nova_to_ark_field(&nova_val);
             assert_eq!(ark_val, AF::from(v));
@@ -364,7 +364,7 @@ mod tests {
     }
 
     fn make_circuit_1(
-        z_in: &Vec<AF>,
+        z_in: &[AF],
         saved_nova_matrices: Option<
             Arc<
                 Vec<(
@@ -378,8 +378,8 @@ mod tests {
         let cs = ConstraintSystem::<AF>::new_ref();
 
         let two = AF::one() + AF::one();
-        let a_val = z_in[0].clone();
-        let b_val = z_in[1].clone();
+        let a_val = z_in[0];
+        let b_val = z_in[1];
 
         let (a_in, a_out) =
             FpVar::new_input_output_pair(cs.clone(), || Ok(a_val), || Ok(a_val * two)).unwrap();
@@ -401,7 +401,7 @@ mod tests {
 
     fn run_nova(
         make_ark_circuit: fn(
-            &Vec<AF>,
+            &[AF],
             Option<
                 Arc<
                     Vec<(
@@ -422,7 +422,7 @@ mod tests {
             z0_primary,
             zi_list[0]
                 .iter()
-                .map(|f| ark_to_nova_field::<AF, NS>(f))
+                .map(ark_to_nova_field::<AF, NS>)
                 .collect::<Vec<NS>>()
         );
 
@@ -432,6 +432,7 @@ mod tests {
             &*default_ck_hint(),
             &*default_ck_hint(),
             vec![],
+            Some("./ppot_0080_20.ptau"),
         )
         .unwrap();
 
@@ -465,7 +466,7 @@ mod tests {
             zn_primary,
             zi_list[num_steps]
                 .iter()
-                .map(|f| ark_to_nova_field::<AF, NS>(f))
+                .map(ark_to_nova_field::<AF, NS>)
                 .collect::<Vec<NS>>()
         );
 
@@ -483,6 +484,6 @@ mod tests {
         let res = compressed_snark.verify(&vk, num_steps, &z0_primary);
         assert!(res.is_ok());
 
-        return zn_primary;
+        zn_primary
     }
 }
