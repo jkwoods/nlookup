@@ -120,10 +120,7 @@ type LcUsize<N> = Vec<(N, usize)>;
 
 #[derive(Clone, Debug)]
 pub struct FCircuit<N: novaPrimeField<Repr = Repr<32>>> {
-    pub lcs: Either<
-        Vec<(LcUsize<N>, LcUsize<N>, LcUsize<N>)>,
-        Arc<Vec<Constraint<N>>>,
-    >,
+    pub lcs: Either<Vec<(LcUsize<N>, LcUsize<N>, LcUsize<N>)>, Arc<Vec<Constraint<N>>>>,
     wit_assignments: Vec<N>,
     input_assignments: Vec<N>,
     output_assignments: Vec<N>,
@@ -224,9 +221,10 @@ impl<N: novaPrimeField<Repr = Repr<32>>> StepCircuit<N> for FCircuit<N> {
     ) -> Result<Vec<AllocatedNum<N>>, bpSynthesisError> {
         // input already allocated in z
         assert_eq!(z.len(), self.input_assignments.len());
-        
+
         // alloc outputs
-        let alloc_out = AllocatedNum::alloc_batch(cs.namespace(|| "out"), || Ok(&self.output_assignments))?;
+        let alloc_out =
+            AllocatedNum::alloc_batch(cs.namespace(|| "out"), || Ok(&self.output_assignments))?;
 
         // combine io
         let alloc_io = z
@@ -236,36 +234,46 @@ impl<N: novaPrimeField<Repr = Repr<32>>> StepCircuit<N> for FCircuit<N> {
             .collect::<Vec<_>>();
 
         // allocate all wits
-        let alloc_wits = AllocatedNum::alloc_batch(&mut cs.namespace(|| "wit"), || Ok(&self.wit_assignments))?;
+        let alloc_wits =
+            AllocatedNum::alloc_batch(&mut cs.namespace(|| "wit"), || Ok(&self.wit_assignments))?;
 
         // add constraints
 
         match &self.lcs {
             Either::Left(lcs) => {
-                let saved_lcs = lcs.iter().enumerate().map(|(i, (a, b, c))| {
-                    let a_lc = bellpepper_lc::<N, CS>(&alloc_io, &alloc_wits, a);
-                    let b_lc = bellpepper_lc::<N, CS>(&alloc_io, &alloc_wits, b);
-                    let c_lc = bellpepper_lc::<N, CS>(&alloc_io, &alloc_wits, c);
-                    if !cs.is_witness_generator() {
-                        cs.enforce(|| format!("con{i}"), |_| a_lc.clone(), |_| b_lc.clone(), |_| c_lc.clone());
-                    }
-                    (a_lc, b_lc, c_lc)
-                }).collect();
+                let saved_lcs = lcs
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (a, b, c))| {
+                        let a_lc = bellpepper_lc::<N, CS>(&alloc_io, &alloc_wits, a);
+                        let b_lc = bellpepper_lc::<N, CS>(&alloc_io, &alloc_wits, b);
+                        let c_lc = bellpepper_lc::<N, CS>(&alloc_io, &alloc_wits, c);
+                        if !cs.is_witness_generator() {
+                            cs.enforce(
+                                || format!("con{i}"),
+                                |_| a_lc.clone(),
+                                |_| b_lc.clone(),
+                                |_| c_lc.clone(),
+                            );
+                        }
+                        (a_lc, b_lc, c_lc)
+                    })
+                    .collect();
                 self.lcs = Either::Right(Arc::new(saved_lcs))
             }
             Either::Right(saved_lcs) => {
                 if !cs.is_witness_generator() {
                     saved_lcs
-                    .iter()
-                    .enumerate()
-                    .for_each(|(i, (a_lc, b_lc, c_lc))| {
-                        cs.enforce(
-                            || format!("con{}", i),
-                            |_| a_lc.clone(),
-                            |_| b_lc.clone(),
-                            |_| c_lc.clone(),
-                        );
-                    });
+                        .iter()
+                        .enumerate()
+                        .for_each(|(i, (a_lc, b_lc, c_lc))| {
+                            cs.enforce(
+                                || format!("con{}", i),
+                                |_| a_lc.clone(),
+                                |_| b_lc.clone(),
+                                |_| c_lc.clone(),
+                            );
+                        });
                 }
             }
         }
