@@ -1550,7 +1550,7 @@ mod tests {
         type S2 = nova_snark::spartan::snark::RelaxedR1CSSNARK<E2, EE2>;
 
         let (c_final, blinds, ram_hints, mut rm) =
-            mem_builder.new_running_mem(batch_size, false, "./ci/ppot_0080_20.ptau");
+            mem_builder.new_running_mem(batch_size, false, "./ppot_0080_20.ptau");
 
         // nova
         let mut running_i = A::one();
@@ -1585,7 +1585,7 @@ mod tests {
             &*default_ck_hint(),
             &*default_ck_hint(),
             ram_batch_sizes.clone(),
-            Some("./ci/ppot_0080_20.ptau"),
+            Some("./ppot_0080_20.ptau"),
         )
         .unwrap();
 

@@ -432,7 +432,7 @@ mod tests {
             &*default_ck_hint(),
             &*default_ck_hint(),
             vec![],
-            Some("./ci/ppot_0080_20.ptau"),
+            Some("./ppot_0080_20.ptau"),
         )
         .unwrap();
 
