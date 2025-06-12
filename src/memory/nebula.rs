@@ -1330,7 +1330,7 @@ pub fn sample_challenges(ic_cmts: &Vec<N2>) -> [N1; 2] {
 mod tests {
     use crate::bellpepper::*;
     use crate::memory::nebula::*;
-    use ark_ff::{One, Zero};
+    use ark_ff::One;
     use ark_relations::gr1cs::{ConstraintSystem, OptimizationGoal};
     use nova_snark::{
         nova::{CompressedSNARK, PublicParams, RandomLayer, RecursiveSNARK},

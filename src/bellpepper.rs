@@ -1,14 +1,14 @@
-use ark_ff::{BigInteger, BigInteger256, Field as arkField, PrimeField as arkPrimeField};
+use ark_ff::{BigInteger256, Field as arkField, PrimeField as ArkPrimeField};
 use ark_r1cs_std::{
     alloc::{AllocVar, AllocationMode},
     boolean::Boolean,
-    fields::{fp::FpVar, FieldVar},
+    fields::fp::FpVar,
 };
 use ark_relations::gr1cs::{
     ConstraintSystemRef, Namespace, SynthesisError as arkSynthesisError, R1CS_PREDICATE_LABEL,
 };
 use core::borrow::Borrow;
-use ff::{Field as novaField, PrimeField as novaPrimeField};
+use ff::PrimeField as NovaPrimeField;
 use halo2curves::serde::Repr;
 use itertools::Either;
 use nova_snark::frontend::{
@@ -34,12 +34,12 @@ pub trait AllocIoVar<V: ?Sized, A: arkField>: Sized + AllocVar<V, A> {
 }
 
 impl<A: arkField> AllocIoVar<bool, A> for Boolean<A> {}
-impl<A: arkPrimeField> AllocIoVar<A, A> for FpVar<A> {}
+impl<A: ArkPrimeField> AllocIoVar<A, A> for FpVar<A> {}
 
 #[inline]
 pub fn ark_to_nova_field<
-    A: arkPrimeField<BigInt = BigInteger256>,
-    N: novaPrimeField<Repr = Repr<32>>,
+    A: ArkPrimeField<BigInt = BigInteger256>,
+    N: NovaPrimeField<Repr = Repr<32>>,
 >(
     ark_ff: &A,
 ) -> N {
@@ -62,7 +62,7 @@ fn u64x4_to_u8x32(input: &[u64; 4]) -> [u8; 32] {
     output
 }
 
-pub fn nova_to_ark_field<N: novaPrimeField<Repr = Repr<32>>, A: arkPrimeField>(nova_ff: &N) -> A {
+pub fn nova_to_ark_field<N: NovaPrimeField<Repr = Repr<32>>, A: ArkPrimeField>(nova_ff: &N) -> A {
     // nova F -> bytes
     let b = nova_ff.to_repr();
 
@@ -71,7 +71,7 @@ pub fn nova_to_ark_field<N: novaPrimeField<Repr = Repr<32>>, A: arkPrimeField>(n
 }
 
 #[inline]
-pub fn ark_to_u64<A: arkPrimeField<BigInt = BigInteger256>>(ark_ff: &A) -> u64 {
+pub fn ark_to_u64<A: ArkPrimeField<BigInt = BigInteger256>>(ark_ff: &A) -> u64 {
     // ark F -> ark BigInt
     let b = ark_ff.into_bigint();
 
@@ -85,7 +85,7 @@ pub fn ark_to_u64<A: arkPrimeField<BigInt = BigInteger256>>(ark_ff: &A) -> u64 {
 }
 
 #[inline]
-fn bellpepper_lc<N: novaPrimeField, CS: ConstraintSystem<N>>(
+fn bellpepper_lc<N: NovaPrimeField, CS: ConstraintSystem<N>>(
     alloc_io: &[AllocatedNum<N>],
     alloc_wits: &[AllocatedNum<N>],
     lc: &Vec<(N, usize)>,
@@ -119,18 +119,18 @@ type Constraint<N> = (
 type LcUsize<N> = Vec<(N, usize)>;
 
 #[derive(Clone, Debug)]
-pub struct FCircuit<N: novaPrimeField<Repr = Repr<32>>> {
+pub struct FCircuit<N: NovaPrimeField<Repr = Repr<32>>> {
     pub lcs: Either<Vec<(LcUsize<N>, LcUsize<N>, LcUsize<N>)>, Arc<Vec<Constraint<N>>>>,
     wit_assignments: Vec<N>,
     input_assignments: Vec<N>,
     output_assignments: Vec<N>,
 }
 
-impl<N: novaPrimeField<Repr = Repr<32>>> FCircuit<N> {
+impl<N: NovaPrimeField<Repr = Repr<32>>> FCircuit<N> {
     // make circuits and witnesses for round i
     // the ark_cs should only have witness and input/output PAIRs
     // (i.e. a user should have never called new_input())
-    pub fn new<A: arkPrimeField<BigInt = BigInteger256>>(
+    pub fn new<A: ArkPrimeField<BigInt = BigInteger256>>(
         ark_cs_ref: ConstraintSystemRef<A>,
         nova_matrices: Option<Arc<Vec<Constraint<N>>>>,
     ) -> Self {
@@ -209,7 +209,7 @@ impl<N: novaPrimeField<Repr = Repr<32>>> FCircuit<N> {
     }
 }
 
-impl<N: novaPrimeField<Repr = Repr<32>>> StepCircuit<N> for FCircuit<N> {
+impl<N: NovaPrimeField<Repr = Repr<32>>> StepCircuit<N> for FCircuit<N> {
     fn arity(&self) -> usize {
         self.output_assignments.len()
     }
@@ -285,9 +285,10 @@ impl<N: novaPrimeField<Repr = Repr<32>>> StepCircuit<N> for FCircuit<N> {
 #[cfg(test)]
 mod tests {
     use crate::{bellpepper::*, utils::*};
-    use ark_ff::{BigInt, One, Zero};
+    use ark_ff::{BigInt, BigInteger, One, Zero};
     use ark_r1cs_std::eq::EqGadget;
     use ark_relations::gr1cs::ConstraintSystem;
+    use ff::Field as NovaField;
     use nova_snark::{
         nova::{CompressedSNARK, PublicParams, RecursiveSNARK},
         traits::{snark::default_ck_hint, Engine, Group},
