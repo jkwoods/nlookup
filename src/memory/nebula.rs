@@ -1462,7 +1462,7 @@ mod tests {
     fn run_ram_nova(
         num_iters: usize,
         heap_batch_size: usize,
-        stk_batch_size: usize,
+        stk_batch_sizes: Vec<usize>,
         mem_builder: MemBuilder<A>,
         do_rw_ops: fn(usize, &mut RunningMem<A>, &mut RunningMemWires<A>),
     ) {
@@ -1473,7 +1473,7 @@ mod tests {
 
         let (c_final, blinds, ram_hints, mut rm) = mem_builder.new_running_mem(
             heap_batch_size,
-            stk_batch_size,
+            stk_batch_sizes.iter().sum::<usize>(),
             false,
             "./ppot_0080_20.ptau",
         );
