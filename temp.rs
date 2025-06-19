@@ -1443,7 +1443,6 @@ mod tests {
         running_ws: &mut A,
         running_fs: &mut A,
         stack_states: &mut Vec<A>,
-        stk_only: bool,
         last_fold: bool,
     ) -> FCircuit<N1> {
         let cs = ConstraintSystem::<A>::new_ref();
@@ -1471,13 +1470,11 @@ mod tests {
 
         do_rw_ops(i, rm, &mut running_mem_wires);
 
-        let last_check = if !stk_only {
+        if !stk_only {
             let res = rm.scan(&mut running_mem_wires, last_fold);
             assert!(res.is_ok());
-            res.unwrap()
-        } else {
-            Boolean::FALSE
-        };
+            let last_check = res.unwrap();
+        }
         let res = rm.ivcify(&running_mem_wires);
         assert!(res.is_ok());
 
@@ -1549,17 +1546,17 @@ mod tests {
         running_pub_i_out
             .enforce_equal(&running_mem_wires.running_pub_i)
             .unwrap();
-        if !stk_only {
-            // last
-            let (_, last_out) = Boolean::new_input_output_pair(
-                cs.clone(),
-                || Ok(last_check.value().unwrap()),
-                || Ok(last_check.value().unwrap()),
-            )
-            .unwrap();
-            // don't need in
-            last_out.enforce_equal(&last_check).unwrap();
-        }
+
+        // last
+        let (_, last_out) = Boolean::new_input_output_pair(
+            cs.clone(),
+            || Ok(last_check.value().unwrap()),
+            || Ok(last_check.value().unwrap()),
+        )
+        .unwrap();
+        // don't need in
+        last_out.enforce_equal(&last_check).unwrap();
+
         // running mem, stack ptrs, etc, needs to be ivcified too, but that doesn't effect our final checks
         // so we omit for now
 
@@ -1583,7 +1580,6 @@ mod tests {
         heap_batch_size: usize,
         stk_batch_sizes: Vec<usize>,
         mem_builder: MemBuilder<A>,
-        stk_only: bool,
         do_rw_ops: fn(usize, &mut RunningMem<A>, &mut RunningMemWires<A>),
     ) {
         type EE1 = nova_snark::provider::hyperkzg::EvaluationEngine<E1>;
@@ -1606,7 +1602,6 @@ mod tests {
         let mut running_ws = A::one();
         let mut running_fs = A::one();
         let mut stack_ptrs = rm.get_starting_stack_states();
-
         let mut circuit_primary = make_full_mem_circ(
             0,
             &mut rm,
@@ -1618,7 +1613,6 @@ mod tests {
             &mut running_ws,
             &mut running_fs,
             &mut stack_ptrs,
-            stk_only,
             false,
         );
 
@@ -1684,7 +1678,6 @@ mod tests {
                     &mut running_ws,
                     &mut running_fs,
                     &mut stack_ptrs,
-                    stk_only,
                     i == num_iters - 2,
                 );
             }
@@ -1713,9 +1706,7 @@ mod tests {
 
         println!("Z {:#?}", zn);
         // is * ws == rs * fs (verifier)
-        if !stk_only {
-            assert_eq!(zn[6], N1::from(1));
-        }
+        assert_eq!(zn[6], N1::from(1));
 
         // incr cmt = acc cmt (verifier)
         for i in 0..c_final.len() {
@@ -1743,7 +1734,7 @@ mod tests {
         mb.push(0, vec![A::from(9), A::from(10)]);
 
         // 2 iters, [push pop push] each time // 2,3
-        run_ram_nova(2, 0, vec![2, 1], mb, true, two_stacks_circ);
+        run_ram_nova(2, 0, vec![2, 1], mb, two_stacks_circ);
     }
 
     fn two_stacks_circ(i: usize, rm: &mut RunningMem<A>, rmw: &mut RunningMemWires<A>) {
@@ -1795,7 +1786,7 @@ mod tests {
         assert_eq!(mb.pop(0), vec![A::from(7), A::from(8)]);
         assert_eq!(mb.pop(0), vec![A::from(5), A::from(6)]);
 
-        run_ram_nova(2, 0, vec![4], mb, false, stack_ends_empty_circ);
+        run_ram_nova(2, 0, vec![4], mb, stack_ends_empty_circ);
     }
 
     fn stack_ends_empty_circ(i: usize, rm: &mut RunningMem<A>, rmw: &mut RunningMemWires<A>) {
@@ -1849,7 +1840,7 @@ mod tests {
         mb.push(0, vec![A::from(7), A::from(8)]);
         assert_eq!(mb.pop(0), vec![A::from(7), A::from(8)]);
 
-        run_ram_nova(2, 0, vec![3], mb, false, stack_basic_circ);
+        run_ram_nova(2, 0, vec![3], mb, stack_basic_circ);
     }
 
     fn stack_basic_circ(i: usize, rm: &mut RunningMem<A>, rmw: &mut RunningMemWires<A>) {
@@ -1902,7 +1893,7 @@ mod tests {
             mb.cond_read(true, 1, MemType::PrivRAM(0))
         ); //vec![A::from(2), A::from(9)], MemType::PrivRAM(0));
 
-        run_ram_nova(2, 1, vec![], mb, false, mem_cond_simple_circ);
+        run_ram_nova(2, 1, vec![], mb, mem_cond_simple_circ);
     }
 
     fn mem_cond_simple_circ(_i: usize, rm: &mut RunningMem<A>, rmw: &mut RunningMemWires<A>) {
@@ -1948,7 +1939,7 @@ mod tests {
         );
         mb.cond_write(true, 4, vec![A::from(20), A::from(21)], MemType::PrivRAM(0));
 
-        run_ram_nova(3, 2, vec![], mb, false, mem_conditional_circ);
+        run_ram_nova(3, 2, vec![], mb, mem_conditional_circ);
     }
 
     fn mem_conditional_circ(i: usize, rm: &mut RunningMem<A>, rmw: &mut RunningMemWires<A>) {
@@ -2006,7 +1997,7 @@ mod tests {
         );
         mb.write(4, vec![A::from(20), A::from(21)], MemType::PrivRAM(0));
 
-        run_ram_nova(2, 2, vec![], mb, false, mem_basic_circ);
+        run_ram_nova(2, 2, vec![], mb, mem_basic_circ);
     }
 
     #[test]
@@ -2035,7 +2026,7 @@ mod tests {
             vec![A::from(12), A::from(13)]
         );
 
-        run_ram_nova(2, 2, vec![], mb, false, mem_pub_rom_circ);
+        run_ram_nova(2, 2, vec![], mb, mem_pub_rom_circ);
     }
 
     fn mem_pub_rom_circ(i: usize, rm: &mut RunningMem<A>, rmw: &mut RunningMemWires<A>) {
@@ -2082,7 +2073,7 @@ mod tests {
         );
         mb.write(4, vec![A::from(20), A::from(21)], MemType::PrivRAM(0));
 
-        run_ram_nova(2, 2, vec![], mb, false, mem_basic_circ);
+        run_ram_nova(2, 2, vec![], mb, mem_basic_circ);
     }
 
     fn mem_basic_circ(i: usize, rm: &mut RunningMem<A>, rmw: &mut RunningMemWires<A>) {
@@ -2124,7 +2115,7 @@ mod tests {
         mb.write(1, vec![A::from(18), A::from(19)], MemType::PrivRAM(0));
         mb.write(2, vec![A::from(20), A::from(21)], MemType::PrivRAM(0));
 
-        run_ram_nova(2, 1, vec![], mb, false, mem_bigger_init_circ);
+        run_ram_nova(2, 1, vec![], mb, mem_bigger_init_circ);
     }
 
     fn mem_bigger_init_circ(i: usize, rm: &mut RunningMem<A>, rmw: &mut RunningMemWires<A>) {
