@@ -322,9 +322,7 @@ impl<F: ArkPrimeField> MemBuilder<F> {
         let write_elem = if !cond {
             self.padding(addr)
         } else {
-            let mem_tag = match ty {
-                ref m => self.mem_spaces.iter().position(|r| *r == *m).unwrap(),
-            };
+            let mem_tag = self.mem_spaces.iter().position(|r| *r == ty).unwrap();
 
             let we = HeapElem::new_f(
                 F::from(self.ts as u64),
@@ -368,9 +366,7 @@ impl<F: ArkPrimeField> MemBuilder<F> {
         assert!(!self.mem.contains_key(&addr));
         //assert!((addr as u64) < (1_u64 << 32));
 
-        let sr = match mem_tag {
-            ref m => self.mem_spaces.iter().position(|r| *r == *m).unwrap(),
-        };
+        let sr = self.mem_spaces.iter().position(|r| *r == mem_tag).unwrap();
 
         let elem = HeapElem::new_f(F::ZERO, F::from(addr as u64), vals, F::from(sr as u64));
         self.mem.insert(addr, elem.clone());
@@ -496,7 +492,7 @@ impl<F: ArkPrimeField> MemBuilder<F> {
                     is_hint.extend(nova_im);
                 }
 
-                for (scan_batch_size, fs_vec) in vec![
+                for (scan_batch_size, fs_vec) in [
                     (scan_priv_batch_size, priv_fs),
                     (scan_pub_batch_size, pub_fs),
                 ] {
@@ -663,12 +659,12 @@ impl<F: ArkPrimeField> MemBuilder<F> {
         priv_fs.sort_by(|a, b| a.addr.partial_cmp(&b.addr).unwrap());
         pub_fs.sort_by(|a, b| a.addr.partial_cmp(&b.addr).unwrap());
 
-        let first_pub_addr = if pub_fs.len() > 0 {
+        let first_pub_addr = if !pub_fs.is_empty() {
             pub_fs[0].addr
         } else {
             F::ZERO
         };
-        let first_priv_addr = if priv_fs.len() > 0 {
+        let first_priv_addr = if !priv_fs.is_empty() {
             priv_fs[0].addr
         } else {
             F::ZERO
@@ -687,13 +683,13 @@ impl<F: ArkPrimeField> MemBuilder<F> {
             mem_wits.insert(elem.addr, elem.clone());
         }
 
-        let scan_priv_per_batch = if self.priv_is.len() > 0 && priv_fs.len() > 0 {
+        let scan_priv_per_batch = if !self.priv_is.is_empty() && !priv_fs.is_empty() {
             ((self.priv_is.len() as f32) / (num_iters as f32)).ceil() as usize
         } else {
             0
         };
 
-        let scan_pub_per_batch = if self.pub_is.len() > 0 && pub_fs.len() > 0 {
+        let scan_pub_per_batch = if !self.pub_is.is_empty() && !pub_fs.is_empty() {
             ((self.pub_is.len() as f32) / (num_iters as f32)).ceil() as usize
         } else {
             0
@@ -1183,9 +1179,7 @@ impl<F: ArkPrimeField> RunningMem<F> {
             &FpVar::<F>::new_constant(w.cs.clone(), F::from(mem_type as u64))?,
             cond,
         )?;*/
-        let mem_type = match ty {
-            m => self.mem_spaces.iter().position(|r| *r == m).unwrap(),
-        };
+        let mem_type = self.mem_spaces.iter().position(|r| *r == ty).unwrap();
         cee_pack_l.push(read_mem_elem.sr.clone());
         cee_pack_r.push(FpVar::constant(F::from(mem_type as u64)));
 
@@ -1234,7 +1228,7 @@ impl<F: ArkPrimeField> RunningMem<F> {
         let mut ee_addr_pack_l = Vec::new();
         let mut ee_addr_pack_r = Vec::new();
 
-        for (scan_per_batch, is_vec, fs_vec, mut s, priv_op) in vec![
+        for (scan_per_batch, is_vec, fs_vec, mut s, priv_op) in [
             (
                 self.scan_priv_per_batch,
                 &self.priv_is,
