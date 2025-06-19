@@ -207,7 +207,7 @@ pub enum MemType {
     PrivROM(usize),
     PrivRAM(usize),
     PubROM(usize),
-    PubRAM(usize),
+    PubRAM(usize), // TODO switch
 }
 
 // builds the witness for RunningMem
@@ -560,7 +560,7 @@ impl<F: ArkPrimeField> MemBuilder<F> {
                 */
 
                 let isb = scan_priv_batch_size * (3 + self.elem_len);
-                let fsb = scan_pub_batch_size * (3 + self.elem_len);
+                let fsb = (scan_pub_batch_size + scan_priv_batch_size) * (3 + self.elem_len);
                 let rwb = rw_batch_size * (3 + self.elem_len);
 
                 let mut ordered_hints: Vec<_> = is_hint;
@@ -662,6 +662,17 @@ impl<F: ArkPrimeField> MemBuilder<F> {
         priv_fs.sort_by(|a, b| a.addr.partial_cmp(&b.addr).unwrap());
         pub_fs.sort_by(|a, b| a.addr.partial_cmp(&b.addr).unwrap());
 
+        let first_pub_addr = if pub_fs.len() > 0 {
+            pub_fs[0].addr
+        } else {
+            F::ZERO
+        };
+        let first_priv_addr = if priv_fs.len() > 0 {
+            priv_fs[0].addr
+        } else {
+            F::ZERO
+        };
+
         println!("priv FS {:#?} pub FS {:#?}", priv_fs, pub_fs);
 
         assert_eq!(priv_fs.len(), self.priv_is.len());
@@ -694,7 +705,7 @@ impl<F: ArkPrimeField> MemBuilder<F> {
         assert!(addr_bit_limit <= 254 - 34);
 
         // cmt
-        let key_len = (scan_priv_per_batch + scan_pub_per_batch) * (3 + self.elem_len)
+        let key_len = (scan_priv_per_batch * 2 + scan_pub_per_batch) * (3 + self.elem_len)
             + rw_batch_size * 2 * (3 + self.elem_len);
 
         let ic_gens = Incremental::<E1, E2>::setup(key_len, path);
@@ -739,6 +750,8 @@ impl<F: ArkPrimeField> MemBuilder<F> {
             stack_elem_lens: self.stack_elem_lens.clone(),
             scan_priv_per_batch,
             scan_pub_per_batch,
+            first_priv_addr,
+            first_pub_addr,
             priv_s: 0,
             pub_s: 0,
             mem_spaces: self.mem_spaces,
@@ -746,7 +759,7 @@ impl<F: ArkPrimeField> MemBuilder<F> {
             time_bit_limit,
             addr_bit_limit,
             sr_bit_limit,
-            dummy_mode: false,
+            verifier_mode: false,
         };
 
         rm.pub_hash = rm.get_pub_is_hash();
@@ -770,6 +783,8 @@ pub struct RunningMem<F: ArkPrimeField> {
     pub stack_elem_lens: Vec<usize>,
     pub scan_priv_per_batch: usize,
     pub scan_pub_per_batch: usize,
+    pub first_priv_addr: F,
+    pub first_pub_addr: F,
     priv_s: usize, // iter through scan
     pub_s: usize,  // iter through scan
     mem_spaces: Vec<MemType>,
@@ -777,7 +792,7 @@ pub struct RunningMem<F: ArkPrimeField> {
     time_bit_limit: usize,
     addr_bit_limit: usize,
     sr_bit_limit: usize,
-    dummy_mode: bool,
+    verifier_mode: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -830,6 +845,8 @@ impl<F: ArkPrimeField> RunningMem<F> {
             stack_elem_lens: self.stack_elem_lens.clone(),
             scan_priv_per_batch: self.scan_priv_per_batch,
             scan_pub_per_batch: self.scan_pub_per_batch,
+            first_priv_addr: self.first_priv_addr,
+            first_pub_addr: self.first_pub_addr,
             priv_s: self.priv_s,
             pub_s: self.pub_s,
             mem_spaces: self.mem_spaces.clone(),
@@ -837,8 +854,14 @@ impl<F: ArkPrimeField> RunningMem<F> {
             time_bit_limit: self.time_bit_limit,
             addr_bit_limit: self.addr_bit_limit,
             sr_bit_limit: self.sr_bit_limit,
-            dummy_mode: true,
+            verifier_mode: true,
         }
+    }
+
+    pub fn verifier_checks(&self) {
+        // TODO
+
+        assert!(self.verifier_mode);
     }
 
     pub fn get_starting_stack_states(&self) -> Vec<F> {
@@ -1112,7 +1135,7 @@ impl<F: ArkPrimeField> RunningMem<F> {
             self.ts = w.ts_m1.value()?;
         }
 
-        let read_wit = if self.dummy_mode || !cond.value()? {
+        let read_wit = if self.verifier_mode || !cond.value()? {
             &HeapElem {
                 time: F::zero(),
                 addr: addr.value()?,
@@ -1222,7 +1245,7 @@ impl<F: ArkPrimeField> RunningMem<F> {
                 false,
             ),
         ] {
-            for j in 0..scan_per_batch {
+            for _ in 0..scan_per_batch {
                 let (final_mem_elem, cond) = if s < fs_vec.len() {
                     let fs_wit = fs_vec[s].clone();
                     (
@@ -1566,8 +1589,8 @@ mod tests {
         );
 
         // nova
-        let mut running_priv_i = A::one();
-        let mut running_pub_i = A::one();
+        let mut running_priv_i = rm.first_priv_addr;
+        let mut running_pub_i = rm.first_pub_addr;
         let mut running_is = A::one();
         let mut running_rs = A::one();
         let mut running_ws = A::one();
@@ -1589,7 +1612,7 @@ mod tests {
 
         let z0_primary_full = circuit_primary.get_zi();
         let mut ram_hints_len = heap_batch_size * 2 * (3 + rm.elem_len)
-            + (rm.scan_priv_per_batch + rm.scan_pub_per_batch) * (3 + rm.elem_len);
+            + (rm.scan_priv_per_batch * 2 + rm.scan_pub_per_batch) * (3 + rm.elem_len);
         assert_eq!(stk_batch_sizes.len(), rm.stack_elem_lens.len());
         for (b, l) in stk_batch_sizes.iter().zip(rm.stack_elem_lens.iter()) {
             ram_hints_len += b * l;
@@ -1677,7 +1700,7 @@ mod tests {
 
         println!("Z {:#?}", zn);
         // is * ws == rs * fs (verifier)
-        // TODO assert_eq!(zn[6], N1::from(1));
+        assert_eq!(zn[6], N1::from(1));
 
         // incr cmt = acc cmt (verifier)
         for i in 0..c_final.len() {
