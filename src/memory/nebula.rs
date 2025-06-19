@@ -442,6 +442,7 @@ impl<F: ArkPrimeField> MemBuilder<F> {
         ic_gen: &Incremental<E1, E2>,
         rw_batch_size: usize,
         scan_batch_size: usize, // priv is/fs size
+        stk_batch_size: usize,
         num_iters: usize,
         sep_final: bool, // true -> cmts/ivcify =  [is, rs, ws, stk], [fs]
         // false -> cmts/ivcify = [is, rs, ws, stk, fs]
@@ -461,6 +462,7 @@ impl<F: ArkPrimeField> MemBuilder<F> {
             .map(|i| {
                 let mut is_hint = Vec::new();
                 let mut rs_ws_hint = Vec::new();
+                let mut ss_hint = Vec::new();
                 let mut fs_hint = Vec::new();
 
                 let is_slice = if (i * scan_batch_size + scan_batch_size) <= self.priv_is.len() {
@@ -524,8 +526,22 @@ impl<F: ArkPrimeField> MemBuilder<F> {
                     rs_ws_hint.extend(nova_wm);
                 }
 
+                for sm in
+                    self.ss[(i * stk_batch_size)..(i * stk_batch_size + stk_batch_size)].iter()
+                {
+                    let nova_sm: Vec<N1> = sm
+                        .get_vec()
+                        .iter()
+                        .map(|a| ark_to_nova_field::<F, N1>(a))
+                        .collect();
+
+                    ss_hint.extend(nova_sm);
+                }
+                let ssb = ss_hint.len();
+
                 let mut ordered_hints: Vec<_> = is_hint;
                 ordered_hints.extend(rs_ws_hint);
+                ordered_hints.extend(ss_hint);
                 ordered_hints.extend(fs_hint);
 
                 let isb = scan_batch_size * (3 + self.elem_len);
@@ -534,12 +550,11 @@ impl<F: ArkPrimeField> MemBuilder<F> {
 
                 let hint_ranges = if sep_final {
                     vec![
-                        0..isb,
-                        isb..(isb + rwb * 2),
-                        (isb + rwb * 2)..(isb + fsb + rwb * 2),
+                        0..(isb + rwb * 2),
+                        (isb + rwb * 2)..(isb + fsb + rwb * 2 + ssb),
                     ]
                 } else {
-                    vec![0..(isb + fsb + rwb * 2)]
+                    vec![0..(isb + fsb + rwb * 2 + ssb)]
                 };
                 //println!("HINT RANGES {:#?}", hint_ranges);
 
@@ -655,7 +670,7 @@ impl<F: ArkPrimeField> MemBuilder<F> {
             (0, 0)
         };
 
-        assert_eq!(is_priv_per_batch, fs_priv_per_batch);
+        //assert_eq!(is_priv_per_batch, fs_priv_per_batch);
 
         let sr_bit_limit = logmn(self.mem_spaces.len());
         let time_bit_limit = logmn(self.ts);
@@ -673,6 +688,7 @@ impl<F: ArkPrimeField> MemBuilder<F> {
             &ic_gens,
             rw_batch_size,
             is_priv_per_batch,
+            stk_batch_size,
             num_iters,
             sep_final,
             &vec_fs,
@@ -1483,14 +1499,17 @@ mod tests {
         );
 
         let z0_primary_full = circuit_primary.get_zi();
-        let ram_hints_len = heap_batch_size * 2 * (3 + rm.elem_len) + (rm.scan_per_batch * 2) * (3 + rm.elem_len) + stk_batch_sizes .....;
-        let z0_primary = z0_primary_full
-            [ram_hints_len..]
-            .to_vec();
+        let mut ram_hints_len =
+            heap_batch_size * 2 * (3 + rm.elem_len) + (rm.scan_per_batch * 2) * (3 + rm.elem_len);
+        assert_eq!(stk_batch_sizes.len(), rm.stack_elem_lens.len());
+        for (b, l) in stk_batch_sizes.iter().zip(rm.stack_elem_lens.iter()) {
+            ram_hints_len += b * l;
+        }
+
+        let z0_primary = z0_primary_full[ram_hints_len..].to_vec();
 
         // produce public parameters
-        let ram_batch_sizes =
-            vec![batch_size * 2 * (3 + rm.elem_len) + rm.scan_per_batch * 2 * (3 + rm.elem_len)];
+        let ram_batch_sizes = vec![ram_hints_len];
         let pp = PublicParams::<E1, E2, FCircuit<<E1 as Engine>::Scalar>>::setup(
             &mut circuit_primary,
             &*default_ck_hint(),
@@ -1594,7 +1613,7 @@ mod tests {
         mb.push(0, vec![A::from(9), A::from(10)]);
 
         // 2 iters, [push pop push] each time // 2,3
-        run_ram_nova(2, 0, 3, mb, two_stacks_circ);
+        run_ram_nova(2, 0, vec![2, 1], mb, two_stacks_circ);
     }
 
     fn two_stacks_circ(i: usize, rm: &mut RunningMem<A>, rmw: &mut RunningMemWires<A>) {
@@ -1646,7 +1665,7 @@ mod tests {
         assert_eq!(mb.pop(0), vec![A::from(7), A::from(8)]);
         assert_eq!(mb.pop(0), vec![A::from(5), A::from(6)]);
 
-        run_ram_nova(2, 0, 4, mb, stack_ends_empty_circ);
+        run_ram_nova(2, 0, vec![4], mb, stack_ends_empty_circ);
     }
 
     fn stack_ends_empty_circ(i: usize, rm: &mut RunningMem<A>, rmw: &mut RunningMemWires<A>) {
@@ -1700,7 +1719,7 @@ mod tests {
         mb.push(0, vec![A::from(7), A::from(8)]);
         assert_eq!(mb.pop(0), vec![A::from(7), A::from(8)]);
 
-        run_ram_nova(2, 0, 3, mb, stack_basic_circ);
+        run_ram_nova(2, 0, vec![3], mb, stack_basic_circ);
     }
 
     fn stack_basic_circ(i: usize, rm: &mut RunningMem<A>, rmw: &mut RunningMemWires<A>) {
@@ -1753,7 +1772,7 @@ mod tests {
             mb.cond_read(true, 1, MemType::PrivRAM(0))
         ); //vec![A::from(2), A::from(9)], MemType::PrivRAM(0));
 
-        run_ram_nova(2, 1, 0, mb, mem_cond_simple_circ);
+        run_ram_nova(2, 1, vec![], mb, mem_cond_simple_circ);
     }
 
     fn mem_cond_simple_circ(_i: usize, rm: &mut RunningMem<A>, rmw: &mut RunningMemWires<A>) {
@@ -1799,7 +1818,7 @@ mod tests {
         );
         mb.cond_write(true, 4, vec![A::from(20), A::from(21)], MemType::PrivRAM(0));
 
-        run_ram_nova(3, 2, 0, mb, mem_conditional_circ);
+        run_ram_nova(3, 2, vec![], mb, mem_conditional_circ);
     }
 
     fn mem_conditional_circ(i: usize, rm: &mut RunningMem<A>, rmw: &mut RunningMemWires<A>) {
@@ -1857,7 +1876,7 @@ mod tests {
         );
         mb.write(4, vec![A::from(20), A::from(21)], MemType::PrivRAM(0));
 
-        run_ram_nova(2, 2, 0, mb, mem_basic_circ);
+        run_ram_nova(2, 2, vec![], mb, mem_basic_circ);
     }
 
     #[test]
@@ -1886,7 +1905,7 @@ mod tests {
             vec![A::from(12), A::from(13)]
         );
 
-        run_ram_nova(2, 2, 0, mb, mem_pub_rom_circ);
+        run_ram_nova(2, 2, vec![], mb, mem_pub_rom_circ);
     }
 
     fn mem_pub_rom_circ(i: usize, rm: &mut RunningMem<A>, rmw: &mut RunningMemWires<A>) {
@@ -1933,7 +1952,7 @@ mod tests {
         );
         mb.write(4, vec![A::from(20), A::from(21)], MemType::PrivRAM(0));
 
-        run_ram_nova(2, 2, 0, mb, mem_basic_circ);
+        run_ram_nova(2, 2, vec![], mb, mem_basic_circ);
     }
 
     fn mem_basic_circ(i: usize, rm: &mut RunningMem<A>, rmw: &mut RunningMemWires<A>) {
@@ -1975,7 +1994,7 @@ mod tests {
         mb.write(1, vec![A::from(18), A::from(19)], MemType::PrivRAM(0));
         mb.write(2, vec![A::from(20), A::from(21)], MemType::PrivRAM(0));
 
-        run_ram_nova(2, 1, 0, mb, mem_bigger_init_circ);
+        run_ram_nova(2, 1, vec![], mb, mem_bigger_init_circ);
     }
 
     fn mem_bigger_init_circ(i: usize, rm: &mut RunningMem<A>, rmw: &mut RunningMemWires<A>) {

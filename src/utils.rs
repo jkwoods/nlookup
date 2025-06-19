@@ -1,6 +1,5 @@
 use std::{any::TypeId, ops::DerefMut};
 
-use ark_crypto_primitives::sponge::poseidon::{find_poseidon_ark_and_mds, PoseidonConfig};
 use ark_ff::{BigInteger256, PrimeField};
 use ark_r1cs_std::{
     alloc::AllocVar, boolean::Boolean, eq::EqGadget, fields::fp::FpVar, fields::FieldVar,
@@ -182,27 +181,4 @@ pub fn custom_ge<F: ArkPrimeField>(
     let max_val_fpv = FpVar::new_constant(cs.clone(), F::from((1u64 << max_bits) + 1))?;
     let (bits, _) = (g - l + max_val_fpv).to_bits_le_with_top_bits_zero(max_bits + 1)?;
     Ok(bits.last().unwrap().clone())
-}
-
-// from Eli
-// https://github.com/ecmargo/coral/blob/af1e35d53effe1060f1488675d55681314e24b1d/src/util.rs#L20
-///Uses the `PoseidonDefaultConfig` to compute the Poseidon parameters.
-pub fn construct_poseidon_parameters_internal<F: PrimeField>(
-    rate: usize,
-    full_rounds: u64,
-    partial_rounds: u64,
-    skip_matrices: u64,
-    alpha: u64,
-) -> Option<PoseidonConfig<F>> {
-    let (ark, mds) =
-        find_poseidon_ark_and_mds(255, rate, full_rounds, partial_rounds, skip_matrices);
-    Some(PoseidonConfig {
-        full_rounds: full_rounds as usize,
-        partial_rounds: partial_rounds as usize,
-        alpha,
-        ark,
-        mds,
-        rate,
-        capacity: 1,
-    })
 }
