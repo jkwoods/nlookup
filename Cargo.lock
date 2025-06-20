@@ -770,6 +770,7 @@ dependencies = [
  "rand",
  "rayon",
  "rustc-hash",
+ "serde",
  "tracing",
  "tracing-subscriber",
 ]
