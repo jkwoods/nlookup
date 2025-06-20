@@ -281,7 +281,8 @@ impl<F: ArkPrimeField> MemBuilder<F> {
                 assert!(ell > 0);
                 ell
             })
-            .max().unwrap_or_default();
+            .max()
+            .unwrap_or_default();
 
         mem_spaces.sort();
         mem_spaces.dedup();
@@ -760,7 +761,12 @@ impl<F: ArkPrimeField> MemBuilder<F> {
         assert!(addr_bit_limit <= 254 - 34);
 
         // cmt
-        let max_elem_len = self.mem_spaces.iter().map(|m| m.elem_len()).max().unwrap_or_default();
+        let max_elem_len = self
+            .mem_spaces
+            .iter()
+            .map(|m| m.elem_len())
+            .max()
+            .unwrap_or_default();
         let mut key_len = (scan_priv_per_batch * 2 + scan_pub_per_batch) * (3 + max_elem_len);
         assert_eq!(rw_batch_sizes.len(), self.mem_spaces.len());
         for m in &self.mem_spaces {
@@ -997,7 +1003,12 @@ impl<F: ArkPrimeField> RunningMem<F> {
             FpVar::new_witness(cs.clone(), || Ok(self.perm_chal[0]))?,
             FpVar::new_witness(cs.clone(), || Ok(self.perm_chal[1]))?,
         ];
-        let max_elem_len = self.mem_spaces.iter().map(|m| m.elem_len()).max().unwrap_or_default();
+        let max_elem_len = self
+            .mem_spaces
+            .iter()
+            .map(|m| m.elem_len())
+            .max()
+            .unwrap_or_default();
 
         let mut chal_pow = perm_chal[1].clone();
         for _ in 1..max_elem_len {
