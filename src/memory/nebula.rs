@@ -1,5 +1,4 @@
 // TODOs
-// priv fs
 // interface for final verifier checks
 // get rid of padding in typical mem
 
@@ -204,10 +203,10 @@ impl<F: ArkPrimeField> HeapElemWires<F> {
 
 #[derive(Clone, Eq, Debug, PartialEq, PartialOrd, Ord)]
 pub enum MemType {
+    PubROM(usize),
+    PubRAM(usize),
     PrivROM(usize),
     PrivRAM(usize),
-    PubROM(usize),
-    PubRAM(usize), // TODO switch
 }
 
 // builds the witness for RunningMem
@@ -634,7 +633,7 @@ impl<F: ArkPrimeField> MemBuilder<F> {
         sep_final: bool, // true -> cmts/ivcify =  [is], [rs, ws], [fs]
         // false -> cmts/ivcify = [is, rs, ws, fs]
         path: P,
-    ) -> (Vec<N2>, Vec<Vec<N1>>, Vec<Vec<N1>>, RunningMem<F>) {
+    ) -> (Vec<Vec<N1>>, Vec<Vec<N1>>, RunningMem<F>) {
         let total_stk_batch_sizes = stk_batch_sizes.iter().sum::<usize>();
         assert_eq!(self.rs.len(), self.ws.len());
         assert!(
@@ -669,8 +668,6 @@ impl<F: ArkPrimeField> MemBuilder<F> {
         } else {
             F::ZERO
         };
-
-        println!("priv FS {:#?} pub FS {:#?}", priv_fs, pub_fs);
 
         assert_eq!(priv_fs.len(), self.priv_is.len());
         assert_eq!(pub_fs.len(), self.pub_is.len());
@@ -723,7 +720,7 @@ impl<F: ArkPrimeField> MemBuilder<F> {
             &pub_fs,
             &padding,
         );
-        println!("RAM HINTS {:#?}", ram_hints);
+        //println!("RAM HINTS {:#?}", ram_hints);
 
         let nova_perm_chal = sample_challenges(&ic_cmt);
         let mut perm_chal = vec![
@@ -751,8 +748,6 @@ impl<F: ArkPrimeField> MemBuilder<F> {
             stack_elem_lens: self.stack_elem_lens.clone(),
             scan_priv_per_batch,
             scan_pub_per_batch,
-            first_priv_addr,
-            first_pub_addr,
             priv_s: 0,
             pub_s: 0,
             mem_spaces: self.mem_spaces,
@@ -761,11 +756,19 @@ impl<F: ArkPrimeField> MemBuilder<F> {
             addr_bit_limit,
             sr_bit_limit,
             verifier_mode: false,
+            ic_cmt,
+            running_priv_i: first_priv_addr,
+            running_pub_i: first_pub_addr,
+            running_is: F::ONE,
+            running_rs: F::ONE,
+            running_ws: F::ONE,
+            running_fs: F::ONE,
+            stack_states: vec![F::ZERO; self.stack_elem_lens.len()],
         };
 
         rm.pub_hash = rm.get_pub_is_hash();
 
-        (ic_cmt, blinds, ram_hints, rm)
+        (blinds, ram_hints, rm)
     }
 }
 
@@ -784,8 +787,6 @@ pub struct RunningMem<F: ArkPrimeField> {
     pub stack_elem_lens: Vec<usize>,
     pub scan_priv_per_batch: usize,
     pub scan_pub_per_batch: usize,
-    pub first_priv_addr: F,
-    pub first_pub_addr: F,
     priv_s: usize, // iter through scan
     pub_s: usize,  // iter through scan
     mem_spaces: Vec<MemType>,
@@ -794,6 +795,15 @@ pub struct RunningMem<F: ArkPrimeField> {
     addr_bit_limit: usize,
     sr_bit_limit: usize,
     verifier_mode: bool,
+    ic_cmt: Vec<N2>,
+    // ivc storage
+    running_priv_i: F,
+    running_pub_i: F,
+    running_is: F,
+    running_rs: F,
+    running_ws: F,
+    running_fs: F,
+    stack_states: Vec<F>,
 }
 
 #[derive(Clone, Debug)]
@@ -809,45 +819,40 @@ pub struct RunningMemWires<F: ArkPrimeField> {
     pub ts_m1: FpVar<F>,
     pub perm_chal: Vec<FpVar<F>>,
     pub stack_states: Vec<FpVar<F>>,
+    pub last_check: Option<Boolean<F>>,
+    pub pub_is_hash: FpVar<F>,
     scan_called: bool,
-    pub rw_ops: Vec<HeapElemWires<F>>,
-    pub stk_ops: Vec<StackElemWires<F>>,
-    pub is_ops: Vec<HeapElemWires<F>>,
-    pub fs_ops: Vec<HeapElemWires<F>>,
+    // ivc bookkeeping
+    rw_ops: Vec<HeapElemWires<F>>,
+    stk_ops: Vec<StackElemWires<F>>,
+    is_ops: Vec<HeapElemWires<F>>,
+    fs_ops: Vec<HeapElemWires<F>>,
+    prev_running_priv_i: FpVar<F>,
+    prev_running_pub_i: FpVar<F>,
+    prev_running_is: FpVar<F>,
+    prev_running_rs: FpVar<F>,
+    prev_running_ws: FpVar<F>,
+    prev_running_fs: FpVar<F>,
+    prev_stack_states: Vec<FpVar<F>>,
+    prev_ts_m1: FpVar<F>,
 }
 
 impl<F: ArkPrimeField> RunningMem<F> {
-    pub fn get_dummy(&self, ic_cmt: &Vec<N2>) -> Self {
-        let mem_wits = new_hash_map();
-
-        let nova_perm_chal = sample_challenges(ic_cmt);
-        let mut perm_chal = vec![
-            nova_to_ark_field::<N1, F>(&nova_perm_chal[0]),
-            nova_to_ark_field::<N1, F>(&nova_perm_chal[1]),
-        ];
-
-        let mut chal_pow = perm_chal[1];
-        for _ in 1..self.elem_len {
-            chal_pow *= perm_chal[1];
-            perm_chal.push(chal_pow);
-        }
-
+    pub fn get_dummy(&self) -> Self {
         Self {
             priv_is: vec![self.padding.clone(); self.priv_is.len()],
             pub_is: self.pub_is.clone(),
-            mem_wits,
+            mem_wits: new_hash_map(),
             stack_wits: vec![vec![]; self.stack_wits.len()],
             priv_fs: vec![self.padding.clone(); self.priv_fs.len()],
             pub_fs: vec![self.padding.clone(); self.pub_fs.len()],
             pub_hash: self.pub_hash,
             ts: F::zero(),
-            perm_chal,
+            perm_chal: self.perm_chal.clone(),
             elem_len: self.elem_len,
             stack_elem_lens: self.stack_elem_lens.clone(),
             scan_priv_per_batch: self.scan_priv_per_batch,
             scan_pub_per_batch: self.scan_pub_per_batch,
-            first_priv_addr: self.first_priv_addr,
-            first_pub_addr: self.first_pub_addr,
             priv_s: self.priv_s,
             pub_s: self.pub_s,
             mem_spaces: self.mem_spaces.clone(),
@@ -856,17 +861,37 @@ impl<F: ArkPrimeField> RunningMem<F> {
             addr_bit_limit: self.addr_bit_limit,
             sr_bit_limit: self.sr_bit_limit,
             verifier_mode: true,
+            ic_cmt: self.ic_cmt.clone(),
+            running_priv_i: self.running_priv_i,
+            running_pub_i: self.running_pub_i,
+            running_is: F::ONE,
+            running_rs: F::ONE,
+            running_ws: F::ONE,
+            running_fs: F::ONE,
+            stack_states: vec![F::ZERO; self.stack_elem_lens.len()],
         }
     }
 
-    pub fn verifier_checks(&self) {
-        // TODO
-
+    pub fn verifier_checks(&self, zn: &[N1], acc_cmt: &[N2], stk_only: bool) {
         assert!(self.verifier_mode);
-    }
 
-    pub fn get_starting_stack_states(&self) -> Vec<F> {
-        vec![F::ZERO; self.stack_elem_lens.len()]
+        // pub hash
+        assert_eq!(ark_to_nova_field::<F, N1>(&self.get_pub_is_hash()), zn[2]);
+
+        // is * ws == rs * fs
+        if !stk_only {
+            assert_eq!(zn[3], N1::from(1));
+        }
+
+        // incr cmt = acc cmt
+        for (cmt, acmt) in self.ic_cmt.iter().zip(acc_cmt.iter()) {
+            assert_eq!(cmt, acmt);
+        }
+
+        // randomness correct
+        let nova_perm_chal = sample_challenges(acc_cmt);
+        assert_eq!(nova_perm_chal[0], zn[0]);
+        assert_eq!(nova_perm_chal[1], zn[1]);
     }
 
     // can be called by prove on real RunningMem or by Verifier on dummy to produce same result
@@ -893,20 +918,13 @@ impl<F: ArkPrimeField> RunningMem<F> {
     pub fn begin_new_circuit(
         &mut self,
         cs: ConstraintSystemRef<F>,
-        running_priv_i: F,
-        running_pub_i: F,
-        running_is: F,
-        running_rs: F,
-        running_ws: F,
-        running_fs: F,
-        stack_states: &[F],
     ) -> Result<RunningMemWires<F>, SynthesisError> {
-        let running_priv_i = FpVar::new_witness(cs.clone(), || Ok(running_priv_i))?;
-        let running_pub_i = FpVar::new_witness(cs.clone(), || Ok(running_pub_i))?;
-        let running_is = FpVar::new_witness(cs.clone(), || Ok(running_is))?;
-        let running_rs = FpVar::new_witness(cs.clone(), || Ok(running_rs))?;
-        let running_ws = FpVar::new_witness(cs.clone(), || Ok(running_ws))?;
-        let running_fs = FpVar::new_witness(cs.clone(), || Ok(running_fs))?;
+        let running_priv_i = FpVar::new_witness(cs.clone(), || Ok(self.running_priv_i))?;
+        let running_pub_i = FpVar::new_witness(cs.clone(), || Ok(self.running_pub_i))?;
+        let running_is = FpVar::new_witness(cs.clone(), || Ok(self.running_is))?;
+        let running_rs = FpVar::new_witness(cs.clone(), || Ok(self.running_rs))?;
+        let running_ws = FpVar::new_witness(cs.clone(), || Ok(self.running_ws))?;
+        let running_fs = FpVar::new_witness(cs.clone(), || Ok(self.running_fs))?;
         let ts_m1 = FpVar::new_witness(cs.clone(), || Ok(self.ts))?;
         let mut perm_chal = vec![
             FpVar::new_witness(cs.clone(), || Ok(self.perm_chal[0]))?,
@@ -918,10 +936,22 @@ impl<F: ArkPrimeField> RunningMem<F> {
             perm_chal.push(chal_pow.clone());
         }
 
-        let stack_states = stack_states
+        let pub_is_hash = FpVar::new_witness(cs.clone(), || Ok(self.pub_hash))?;
+
+        let stack_states = self
+            .stack_states
             .iter()
             .map(|sp| FpVar::new_witness(cs.clone(), || Ok(sp)))
             .collect::<Result<Vec<FpVar<F>>, _>>()?;
+
+        let prev_running_priv_i = running_priv_i.clone();
+        let prev_running_pub_i = running_pub_i.clone();
+        let prev_running_is = running_is.clone();
+        let prev_running_rs = running_rs.clone();
+        let prev_running_ws = running_ws.clone();
+        let prev_running_fs = running_fs.clone();
+        let prev_stack_states = stack_states.clone();
+        let prev_ts_m1 = ts_m1.clone();
 
         Ok(RunningMemWires {
             cs: cs.clone(),
@@ -933,12 +963,22 @@ impl<F: ArkPrimeField> RunningMem<F> {
             running_fs,
             ts_m1,
             perm_chal,
+            pub_is_hash,
             stack_states,
+            last_check: None,
             scan_called: false,
             rw_ops: vec![],
             stk_ops: vec![],
             is_ops: vec![],
             fs_ops: vec![],
+            prev_running_priv_i,
+            prev_running_pub_i,
+            prev_running_is,
+            prev_running_rs,
+            prev_running_ws,
+            prev_running_fs,
+            prev_stack_states,
+            prev_ts_m1,
         })
     }
 
@@ -1220,7 +1260,7 @@ impl<F: ArkPrimeField> RunningMem<F> {
         &mut self,
         w: &mut RunningMemWires<F>,
         last_round: bool, // is this the last folding?
-    ) -> Result<Boolean<F>, SynthesisError> {
+    ) -> Result<(), SynthesisError> {
         w.scan_called = true;
         assert!(!self.priv_fs.is_empty() || !self.pub_fs.is_empty()); // otherwise, no need to scan
 
@@ -1340,7 +1380,7 @@ impl<F: ArkPrimeField> RunningMem<F> {
 
         // final check
         let last_check = Boolean::new_witness(w.cs.clone(), || Ok(last_round))?;
-        let union = &(&w.running_is * &w.running_ws * &FpVar::constant(self.pub_hash))
+        let union = &(&w.running_is * &w.running_ws * &w.pub_is_hash)
             .is_eq(&(&w.running_fs * &w.running_rs))?;
         union.conditional_enforce_equal(&Boolean::TRUE, &last_check)?;
 
@@ -1348,6 +1388,7 @@ impl<F: ArkPrimeField> RunningMem<F> {
         w.running_rs = last_check.select(&FpVar::zero(), &w.running_rs)?;
         w.running_ws = last_check.select(&FpVar::zero(), &w.running_ws)?;
         w.running_fs = last_check.select(&FpVar::zero(), &w.running_fs)?;
+        w.last_check = Some(last_check);
 
         // packed
         chunk_ee_zero(&eez_pack, self.time_bit_limit, w.cs.clone())?;
@@ -1358,10 +1399,10 @@ impl<F: ArkPrimeField> RunningMem<F> {
             w.cs.clone(),
         )?;
 
-        Ok(last_check)
+        Ok(())
     }
 
-    pub fn ivcify(&self, w: &RunningMemWires<F>) -> Result<(), SynthesisError> {
+    pub fn ivcify(&mut self, w: &RunningMemWires<F>) -> Result<(), SynthesisError> {
         assert!(w.scan_called || (self.priv_fs.is_empty() && self.pub_fs.is_empty()));
 
         // [is, rs, ws, stk, fs]
@@ -1378,7 +1419,7 @@ impl<F: ArkPrimeField> RunningMem<F> {
             o.ivcify(w.cs.clone())?;
         }
 
-        println!("INIT");
+        /*    println!("INIT");
         for mo in &w.is_ops {
             mo.print_vals();
         }
@@ -1393,14 +1434,135 @@ impl<F: ArkPrimeField> RunningMem<F> {
         println!("FINAL");
         for mo in &w.fs_ops {
             mo.print_vals();
+        }*/
+
+        // perm chal
+        for c in &w.perm_chal[0..2] {
+            let (pc_in, pc_out) = FpVar::new_input_output_pair(
+                w.cs.clone(),
+                || Ok(c.value().unwrap()),
+                || Ok(c.value().unwrap()),
+            )
+            .unwrap();
+            pc_in.enforce_equal(&c).unwrap();
+            pc_out.enforce_equal(&c).unwrap();
         }
 
+        let (pub_is_hash_in, pub_is_hash_out) = FpVar::new_input_output_pair(
+            w.cs.clone(),
+            || Ok(w.pub_is_hash.value().unwrap()),
+            || Ok(w.pub_is_hash.value().unwrap()),
+        )
+        .unwrap();
+        pub_is_hash_in.enforce_equal(&w.pub_is_hash).unwrap();
+        pub_is_hash_out.enforce_equal(&w.pub_is_hash).unwrap();
+
+        if w.last_check.is_some() {
+            // last
+            let val = w.last_check.as_ref().unwrap().value().unwrap();
+            let (_, last_out) =
+                Boolean::new_input_output_pair(w.cs.clone(), || Ok(val), || Ok(val)).unwrap();
+            // don't need in
+            last_out
+                .enforce_equal(&w.last_check.as_ref().unwrap())
+                .unwrap();
+        }
+
+        let (running_is_in, running_is_out) = FpVar::new_input_output_pair(
+            w.cs.clone(),
+            || Ok(w.prev_running_is.value().unwrap()),
+            || Ok(w.running_is.value().unwrap()),
+        )
+        .unwrap();
+        running_is_in.enforce_equal(&w.prev_running_is).unwrap();
+        running_is_out.enforce_equal(&w.running_is).unwrap();
+
+        let (running_rs_in, running_rs_out) = FpVar::new_input_output_pair(
+            w.cs.clone(),
+            || Ok(w.prev_running_rs.value().unwrap()),
+            || Ok(w.running_rs.value().unwrap()),
+        )
+        .unwrap();
+        running_rs_in.enforce_equal(&w.prev_running_rs).unwrap();
+        running_rs_out.enforce_equal(&w.running_rs).unwrap();
+
+        let (running_ws_in, running_ws_out) = FpVar::new_input_output_pair(
+            w.cs.clone(),
+            || Ok(w.prev_running_ws.value().unwrap()),
+            || Ok(w.running_ws.value().unwrap()),
+        )
+        .unwrap();
+        running_ws_in.enforce_equal(&w.prev_running_ws).unwrap();
+        running_ws_out.enforce_equal(&w.running_ws).unwrap();
+
+        let (running_fs_in, running_fs_out) = FpVar::new_input_output_pair(
+            w.cs.clone(),
+            || Ok(w.prev_running_fs.value().unwrap()),
+            || Ok(w.running_fs.value().unwrap()),
+        )
+        .unwrap();
+        running_fs_in.enforce_equal(&w.prev_running_fs).unwrap();
+        running_fs_out.enforce_equal(&w.running_fs).unwrap();
+
+        // i
+        let (running_priv_i_in, running_priv_i_out) = FpVar::new_input_output_pair(
+            w.cs.clone(),
+            || Ok(w.prev_running_priv_i.value().unwrap()),
+            || Ok(w.running_priv_i.value().unwrap()),
+        )
+        .unwrap();
+        running_priv_i_in
+            .enforce_equal(&w.prev_running_priv_i)
+            .unwrap();
+        running_priv_i_out.enforce_equal(&w.running_priv_i).unwrap();
+
+        let (running_pub_i_in, running_pub_i_out) = FpVar::new_input_output_pair(
+            w.cs.clone(),
+            || Ok(w.prev_running_pub_i.value().unwrap()),
+            || Ok(w.running_pub_i.value().unwrap()),
+        )
+        .unwrap();
+        running_pub_i_in
+            .enforce_equal(&w.prev_running_pub_i)
+            .unwrap();
+        running_pub_i_out.enforce_equal(&w.running_pub_i).unwrap();
+
+        // ts m1
+        let (ts_in, ts_out) = FpVar::new_input_output_pair(
+            w.cs.clone(),
+            || Ok(w.prev_ts_m1.value().unwrap()),
+            || Ok(w.ts_m1.value().unwrap()),
+        )
+        .unwrap();
+        ts_in.enforce_equal(&w.prev_ts_m1).unwrap();
+        ts_out.enforce_equal(&w.ts_m1).unwrap();
+
+        // stacks
+        for (prev_ss, ss) in w.prev_stack_states.iter().zip(w.stack_states.iter()) {
+            let (ss_in, ss_out) = FpVar::new_input_output_pair(
+                w.cs.clone(),
+                || Ok(prev_ss.value().unwrap()),
+                || Ok(ss.value().unwrap()),
+            )
+            .unwrap();
+            ss_in.enforce_equal(&prev_ss).unwrap();
+            ss_out.enforce_equal(&ss).unwrap();
+        }
+
+        self.running_priv_i = w.running_priv_i.value().unwrap();
+        self.running_pub_i = w.running_pub_i.value().unwrap();
+        self.running_is = w.running_is.value().unwrap();
+        self.running_rs = w.running_rs.value().unwrap();
+        self.running_ws = w.running_ws.value().unwrap();
+        self.running_fs = w.running_fs.value().unwrap();
+        self.stack_states = w.stack_states.iter().map(|f| f.value().unwrap()).collect();
+        // TODO PERM CHAL
         Ok(())
     }
 }
 
 // deterministic
-pub fn sample_challenges(ic_cmts: &Vec<N2>) -> [N1; 2] {
+pub fn sample_challenges(ic_cmts: &[N2]) -> [N1; 2] {
     let ro_consts = ROConstants::<E1>::default();
     let mut hasher = <E1 as Engine>::RO::new(ro_consts);
     for c in ic_cmts {
@@ -1417,7 +1579,6 @@ pub fn sample_challenges(ic_cmts: &Vec<N2>) -> [N1; 2] {
 mod tests {
     use crate::bellpepper::*;
     use crate::memory::nebula::*;
-    use ark_ff::One;
     use ark_relations::gr1cs::{ConstraintSystem, OptimizationGoal};
     use nova_snark::{
         nova::{CompressedSNARK, PublicParams, RandomLayer, RecursiveSNARK},
@@ -1430,144 +1591,24 @@ mod tests {
         i: usize,
         rm: &mut RunningMem<A>,
         do_rw_ops: fn(usize, &mut RunningMem<A>, &mut RunningMemWires<A>),
-        running_priv_i: &mut A,
-        running_pub_i: &mut A,
-        running_is: &mut A,
-        running_rs: &mut A,
-        running_ws: &mut A,
-        running_fs: &mut A,
-        stack_states: &mut Vec<A>,
         stk_only: bool,
         last_fold: bool,
     ) -> FCircuit<N1> {
         let cs = ConstraintSystem::<A>::new_ref();
         cs.set_optimization_goal(OptimizationGoal::Constraints);
 
-        let mut running_mem_wires = rm
-            .begin_new_circuit(
-                cs.clone(),
-                *running_priv_i,
-                *running_pub_i,
-                *running_is,
-                *running_rs,
-                *running_ws,
-                *running_fs,
-                stack_states,
-            )
-            .unwrap();
-
-        let running_priv_i_prev = running_mem_wires.running_priv_i.clone();
-        let running_pub_i_prev = running_mem_wires.running_pub_i.clone();
-        let running_is_prev = running_mem_wires.running_is.clone();
-        let running_rs_prev = running_mem_wires.running_rs.clone();
-        let running_ws_prev = running_mem_wires.running_ws.clone();
-        let running_fs_prev = running_mem_wires.running_fs.clone();
+        let mut running_mem_wires = rm.begin_new_circuit(cs.clone()).unwrap();
 
         do_rw_ops(i, rm, &mut running_mem_wires);
 
-        let last_check = if !stk_only {
+        if !stk_only {
             let res = rm.scan(&mut running_mem_wires, last_fold);
             assert!(res.is_ok());
             res.unwrap()
-        } else {
-            Boolean::FALSE
-        };
+        }
+
         let res = rm.ivcify(&running_mem_wires);
         assert!(res.is_ok());
-
-        // TODO MOVE
-        let (running_is_in, running_is_out) = FpVar::new_input_output_pair(
-            cs.clone(),
-            || Ok(running_is_prev.value().unwrap()),
-            || Ok(running_mem_wires.running_is.value().unwrap()),
-        )
-        .unwrap();
-        running_is_in.enforce_equal(&running_is_prev).unwrap();
-        running_is_out
-            .enforce_equal(&running_mem_wires.running_is)
-            .unwrap();
-
-        let (running_rs_in, running_rs_out) = FpVar::new_input_output_pair(
-            cs.clone(),
-            || Ok(running_rs_prev.value().unwrap()),
-            || Ok(running_mem_wires.running_rs.value().unwrap()),
-        )
-        .unwrap();
-        running_rs_in.enforce_equal(&running_rs_prev).unwrap();
-        running_rs_out
-            .enforce_equal(&running_mem_wires.running_rs)
-            .unwrap();
-
-        let (running_ws_in, running_ws_out) = FpVar::new_input_output_pair(
-            cs.clone(),
-            || Ok(running_ws_prev.value().unwrap()),
-            || Ok(running_mem_wires.running_ws.value().unwrap()),
-        )
-        .unwrap();
-        running_ws_in.enforce_equal(&running_ws_prev).unwrap();
-        running_ws_out
-            .enforce_equal(&running_mem_wires.running_ws)
-            .unwrap();
-
-        let (running_fs_in, running_fs_out) = FpVar::new_input_output_pair(
-            cs.clone(),
-            || Ok(running_fs_prev.value().unwrap()),
-            || Ok(running_mem_wires.running_fs.value().unwrap()),
-        )
-        .unwrap();
-        running_fs_in.enforce_equal(&running_fs_prev).unwrap();
-        running_fs_out
-            .enforce_equal(&running_mem_wires.running_fs)
-            .unwrap();
-
-        // i
-        let (running_priv_i_in, running_priv_i_out) = FpVar::new_input_output_pair(
-            cs.clone(),
-            || Ok(running_priv_i_prev.value().unwrap()),
-            || Ok(running_mem_wires.running_priv_i.value().unwrap()),
-        )
-        .unwrap();
-        running_priv_i_in
-            .enforce_equal(&running_priv_i_prev)
-            .unwrap();
-        running_priv_i_out
-            .enforce_equal(&running_mem_wires.running_priv_i)
-            .unwrap();
-        let (running_pub_i_in, running_pub_i_out) = FpVar::new_input_output_pair(
-            cs.clone(),
-            || Ok(running_pub_i_prev.value().unwrap()),
-            || Ok(running_mem_wires.running_pub_i.value().unwrap()),
-        )
-        .unwrap();
-        running_pub_i_in.enforce_equal(&running_pub_i_prev).unwrap();
-        running_pub_i_out
-            .enforce_equal(&running_mem_wires.running_pub_i)
-            .unwrap();
-        if !stk_only {
-            // last
-            let (_, last_out) = Boolean::new_input_output_pair(
-                cs.clone(),
-                || Ok(last_check.value().unwrap()),
-                || Ok(last_check.value().unwrap()),
-            )
-            .unwrap();
-            // don't need in
-            last_out.enforce_equal(&last_check).unwrap();
-        }
-        // running mem, stack ptrs, etc, needs to be ivcified too, but that doesn't effect our final checks
-        // so we omit for now
-
-        *running_priv_i = running_mem_wires.running_priv_i.value().unwrap(); //running_i_out.value().unwrap();
-        *running_pub_i = running_mem_wires.running_pub_i.value().unwrap(); //running_i_out.value().unwrap();
-        *running_is = running_is_out.value().unwrap();
-        *running_rs = running_rs_out.value().unwrap();
-        *running_ws = running_ws_out.value().unwrap();
-        *running_fs = running_fs_out.value().unwrap();
-        *stack_states = running_mem_wires
-            .stack_states
-            .iter()
-            .map(|f| f.value().unwrap())
-            .collect();
 
         FCircuit::new(cs, None)
     }
@@ -1585,36 +1626,17 @@ mod tests {
         type S1 = nova_snark::spartan::snark::RelaxedR1CSSNARK<E1, EE1>;
         type S2 = nova_snark::spartan::snark::RelaxedR1CSSNARK<E2, EE2>;
 
-        let (c_final, blinds, ram_hints, mut rm) = mem_builder.new_running_mem(
+        let (blinds, ram_hints, mut rm) = mem_builder.new_running_mem(
             heap_batch_size,
             stk_batch_sizes.clone(),
             false,
             "./ppot_0080_20.ptau",
         );
 
-        // nova
-        let mut running_priv_i = rm.first_priv_addr;
-        let mut running_pub_i = rm.first_pub_addr;
-        let mut running_is = A::one();
-        let mut running_rs = A::one();
-        let mut running_ws = A::one();
-        let mut running_fs = A::one();
-        let mut stack_ptrs = rm.get_starting_stack_states();
+        let verifier_rm = rm.get_dummy();
 
-        let mut circuit_primary = make_full_mem_circ(
-            0,
-            &mut rm,
-            do_rw_ops,
-            &mut running_priv_i,
-            &mut running_pub_i,
-            &mut running_is,
-            &mut running_rs,
-            &mut running_ws,
-            &mut running_fs,
-            &mut stack_ptrs,
-            stk_only,
-            false,
-        );
+        // nova
+        let mut circuit_primary = make_full_mem_circ(0, &mut rm, do_rw_ops, stk_only, false);
 
         let z0_primary_full = circuit_primary.get_zi();
         let mut ram_hints_len = heap_batch_size * 2 * (3 + rm.elem_len)
@@ -1667,20 +1689,8 @@ mod tests {
             assert!(res.is_ok());
 
             if i < num_iters - 1 {
-                circuit_primary = make_full_mem_circ(
-                    i + 1,
-                    &mut rm,
-                    do_rw_ops,
-                    &mut running_priv_i,
-                    &mut running_pub_i,
-                    &mut running_is,
-                    &mut running_rs,
-                    &mut running_ws,
-                    &mut running_fs,
-                    &mut stack_ptrs,
-                    stk_only,
-                    i == num_iters - 2,
-                );
+                circuit_primary =
+                    make_full_mem_circ(i + 1, &mut rm, do_rw_ops, stk_only, i == num_iters - 2);
             }
         }
 
@@ -1702,20 +1712,7 @@ mod tests {
         // check final cmt outputs
         let (zn, ci) = res.unwrap();
 
-        let pub_is = rm.get_pub_is_hash();
-        assert_eq!(pub_is, rm.pub_hash);
-
-        println!("Z {:#?}", zn);
-        // is * ws == rs * fs (verifier)
-        if !stk_only {
-            assert_eq!(zn[6], N1::from(1));
-        }
-
-        // incr cmt = acc cmt (verifier)
-        for i in 0..c_final.len() {
-            //    println!("{}", i);
-            assert_eq!(c_final[i], ci[i]);
-        }
+        verifier_rm.verifier_checks(&zn, &ci, stk_only);
     }
 
     #[test]
