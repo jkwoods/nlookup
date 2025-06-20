@@ -20,9 +20,10 @@ use nova_snark::{
 };
 use rayon::prelude::*;
 use rustc_hash::FxHashMap as HashMap;
+use serde::{Deserialize, Serialize};
 use std::{cmp::max, path::Path};
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct StackElem<F: ArkPrimeField> {
     vals: Vec<F>,
 }
@@ -43,7 +44,7 @@ impl<F: ArkPrimeField> StackElem<F> {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct HeapElem<F: ArkPrimeField> {
     time: F,
     addr: F,
@@ -201,7 +202,7 @@ impl<F: ArkPrimeField> HeapElemWires<F> {
     }
 }
 
-#[derive(Clone, Eq, Debug, PartialEq, PartialOrd, Ord)]
+#[derive(Clone, Eq, Debug, PartialEq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum MemType {
     PubROM(usize),
     PubRAM(usize),
@@ -210,7 +211,7 @@ pub enum MemType {
 }
 
 // builds the witness for RunningMem
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct MemBuilder<F: ArkPrimeField> {
     // bookeeping
     mem: HashMap<usize, HeapElem<F>>,
