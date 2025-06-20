@@ -1444,8 +1444,8 @@ impl<F: ArkPrimeField> RunningMem<F> {
                 || Ok(c.value().unwrap()),
             )
             .unwrap();
-            pc_in.enforce_equal(&c).unwrap();
-            pc_out.enforce_equal(&c).unwrap();
+            pc_in.enforce_equal(c).unwrap();
+            pc_out.enforce_equal(c).unwrap();
         }
 
         let (pub_is_hash_in, pub_is_hash_out) = FpVar::new_input_output_pair(
@@ -1464,7 +1464,7 @@ impl<F: ArkPrimeField> RunningMem<F> {
                 Boolean::new_input_output_pair(w.cs.clone(), || Ok(val), || Ok(val)).unwrap();
             // don't need in
             last_out
-                .enforce_equal(&w.last_check.as_ref().unwrap())
+                .enforce_equal(w.last_check.as_ref().unwrap())
                 .unwrap();
         }
 
@@ -1545,8 +1545,8 @@ impl<F: ArkPrimeField> RunningMem<F> {
                 || Ok(ss.value().unwrap()),
             )
             .unwrap();
-            ss_in.enforce_equal(&prev_ss).unwrap();
-            ss_out.enforce_equal(&ss).unwrap();
+            ss_in.enforce_equal(prev_ss).unwrap();
+            ss_out.enforce_equal(ss).unwrap();
         }
 
         self.running_priv_i = w.running_priv_i.value().unwrap();
