@@ -45,7 +45,7 @@ impl<F: ArkPrimeField> StackElem<F> {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-struct HeapElem<F: ArkPrimeField> {
+pub struct HeapElem<F: ArkPrimeField> {
     time: F,
     addr: F,
     vals: Vec<F>,
@@ -60,6 +60,14 @@ impl<F: ArkPrimeField> HeapElem<F> {
             vals: v,
             sr,
         }
+    }
+
+    pub fn vals(&self) -> &Vec<F> {
+        &self.vals
+    }
+
+    pub fn addr(&self) -> &F {
+        &self.addr
     }
 
     fn padding(addr: usize, elem_len: usize) -> Self {
@@ -680,6 +688,11 @@ impl<F: ArkPrimeField> MemBuilder<F> {
         (final_cmts, blinds, ram_hints)
     }
 
+    // should only be used for testing
+    pub fn get_mem_wits(&self) -> &HashMap<usize, HeapElem<F>> {
+        &self.mem
+    }
+
     // consumes the mem builder object
     pub fn new_running_mem<P: AsRef<Path>>(
         mut self,
@@ -986,6 +999,11 @@ impl<F: ArkPrimeField> RunningMem<F> {
                 .collect::<Result<Vec<FpVar<F>>, _>>()?,
             FpVar::new_witness(cs.clone(), || Ok(self.padding.sr))?,
         ))
+    }
+
+    // should only be used for testing
+    pub fn get_mem_wits(&self) -> &HashMap<F, HeapElem<F>> {
+        &self.mem_wits
     }
 
     pub fn begin_new_circuit(
