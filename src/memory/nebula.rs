@@ -857,7 +857,7 @@ impl<F: ArkPrimeField> MemBuilder<F> {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RunningMem<F: ArkPrimeField> {
     priv_is: Vec<HeapElem<F>>,
     pub_is: Vec<HeapElem<F>>,
