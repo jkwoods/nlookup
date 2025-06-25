@@ -702,8 +702,6 @@ impl<F: ArkPrimeField> MemBuilder<F> {
         // false -> cmts/ivcify = [is, rs, ws, fs]
         path: P,
     ) -> (Vec<Vec<N1>>, Vec<Vec<N1>>, usize, RunningMem<F>) {
-        println!("mem wits {:#?}", self.mem);
-
         let total_rw_batch_sizes = rw_batch_sizes.iter().map(|(_, b)| b).sum::<usize>();
         let total_stk_batch_sizes = stk_batch_sizes.iter().sum::<usize>();
 
@@ -808,7 +806,7 @@ impl<F: ArkPrimeField> MemBuilder<F> {
             &pub_fs,
             &padding,
         );
-        println!("RAM HINTS {:#?}", ram_hints);
+        //println!("RAM HINTS {:#?}", ram_hints);
 
         let nova_perm_chal = sample_challenges(&ic_cmt);
         let mut perm_chal = vec![
@@ -822,7 +820,6 @@ impl<F: ArkPrimeField> MemBuilder<F> {
             perm_chal.push(chal_pow);
         }
 
-        println!("mem wits RM {:#?}", mem_wits);
         let mut rm = RunningMem {
             priv_is: self.priv_is,
             pub_is: self.pub_is,
@@ -1286,8 +1283,6 @@ impl<F: ArkPrimeField> RunningMem<F> {
             self.ts = w.ts_m1.value()?;
         }
 
-        println!("mem wits inside cond op {:#?}", self.mem_wits);
-
         let read_wit = if self.verifier_mode || !cond.value()? {
             &HeapElem {
                 time: F::zero(),
@@ -1300,8 +1295,6 @@ impl<F: ArkPrimeField> RunningMem<F> {
             assert_eq!(rw.addr, addr.value()?);
             rw
         };
-
-        println!("READ WIT {:#?}", read_wit);
 
         let read_mem_elem = HeapElemWires::new(
             FpVar::new_witness(w.cs.clone(), || Ok(read_wit.time))?,
@@ -1533,7 +1526,7 @@ impl<F: ArkPrimeField> RunningMem<F> {
             o.ivcify(w.cs.clone())?;
         }
 
-        println!("INIT");
+        /*println!("INIT");
         for mo in &w.is_ops {
             mo.print_vals();
         }
@@ -1548,7 +1541,7 @@ impl<F: ArkPrimeField> RunningMem<F> {
         println!("FINAL");
         for mo in &w.fs_ops {
             mo.print_vals();
-        }
+        }*/
 
         // perm chal
         for c in &w.perm_chal[0..2] {
