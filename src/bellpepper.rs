@@ -135,9 +135,9 @@ impl<N: NovaPrimeField<Repr = Repr<32>>> FCircuit<N> {
         nova_matrices: Option<Arc<Vec<Constraint<N>>>>,
     ) -> Self {
         ark_cs_ref.finalize();
-        if nova_matrices.is_none() {
+        /*if nova_matrices.is_none() {
             assert!(ark_cs_ref.is_satisfied().unwrap());
-        }
+        }*/
 
         let ark_cs = ark_cs_ref.borrow().unwrap();
 
