@@ -1,8 +1,5 @@
-// TODOs
-// interface for final verifier checks
-// get rid of padding in typical mem
-
 use crate::bellpepper::{ark_to_nova_field, nova_to_ark_field, AllocIoVar};
+use crate::memory::mem_type::*;
 use crate::utils::*;
 use ark_r1cs_std::{
     alloc::AllocVar,
@@ -12,6 +9,7 @@ use ark_r1cs_std::{
     GR1CSVar,
 };
 use ark_relations::gr1cs::{ConstraintSystemRef, SynthesisError};
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use itertools::multiunzip;
 use nova_snark::{
     gadgets::utils::scalar_as_base,
@@ -19,11 +17,12 @@ use nova_snark::{
     traits::{Engine, ROConstants, ROTrait},
 };
 use rayon::prelude::*;
-use rustc_hash::FxHashMap as HashMap;
+use std::collections::HashMap;
+//use rustc_hash::FxHashMap as HashMap;
 use serde::{Deserialize, Serialize};
 use std::{cmp::max, path::Path};
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, CanonicalSerialize, CanonicalDeserialize)]
 struct StackElem<F: ArkPrimeField> {
     vals: Vec<F>,
 }
@@ -44,7 +43,7 @@ impl<F: ArkPrimeField> StackElem<F> {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, CanonicalSerialize, CanonicalDeserialize)]
 pub struct HeapElem<F: ArkPrimeField> {
     time: F,
     addr: F,
@@ -198,59 +197,6 @@ impl<F: ArkPrimeField> HeapElemWires<F> {
             v.enforce_equal(&val_out)?;
         }
         Ok(())
-    }
-}
-
-#[derive(Clone, Eq, Debug, PartialEq, PartialOrd, Ord, Serialize, Deserialize)]
-pub enum MemType {
-    PubROM(usize, usize),
-    PubRAM(usize, usize),
-    PrivROM(usize, usize),
-    PrivRAM(usize, usize),
-}
-
-impl MemType {
-    pub fn priv_ram(tag: usize, elem_len: usize) -> Self {
-        MemType::PrivRAM(tag, elem_len)
-    }
-
-    pub fn priv_rom(tag: usize, elem_len: usize) -> Self {
-        MemType::PrivROM(tag, elem_len)
-    }
-
-    pub fn pub_ram(tag: usize, elem_len: usize) -> Self {
-        MemType::PubRAM(tag, elem_len)
-    }
-
-    pub fn pub_rom(tag: usize, elem_len: usize) -> Self {
-        MemType::PubROM(tag, elem_len)
-    }
-
-    pub fn new(private: bool, ram: bool, tag: usize, elem_len: usize) -> Self {
-        match (private, ram) {
-            (true, true) => MemType::PrivRAM(tag, elem_len),
-            (true, false) => MemType::PrivROM(tag, elem_len),
-            (false, true) => MemType::PubRAM(tag, elem_len),
-            (false, false) => MemType::PubROM(tag, elem_len),
-        }
-    }
-
-    pub fn elem_len(&self) -> usize {
-        match &self {
-            MemType::PubROM(_, l) => *l,
-            MemType::PubRAM(_, l) => *l,
-            MemType::PrivROM(_, l) => *l,
-            MemType::PrivRAM(_, l) => *l,
-        }
-    }
-
-    pub fn tag(&self) -> usize {
-        match &self {
-            MemType::PubROM(t, _) => *t,
-            MemType::PubRAM(t, _) => *t,
-            MemType::PrivROM(t, _) => *t,
-            MemType::PrivRAM(t, _) => *t,
-        }
     }
 }
 
@@ -841,7 +787,7 @@ impl<F: ArkPrimeField> MemBuilder<F> {
             addr_bit_limit,
             sr_bit_limit,
             verifier_mode: false,
-            ic_cmt,
+            ic_cmt: ICCmt::new(ic_cmt),
             running_priv_i: first_priv_addr,
             running_pub_i: first_pub_addr,
             running_is: F::ONE,
@@ -857,7 +803,7 @@ impl<F: ArkPrimeField> MemBuilder<F> {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, CanonicalSerialize, CanonicalDeserialize)]
 pub struct RunningMem<F: ArkPrimeField> {
     priv_is: Vec<HeapElem<F>>,
     pub_is: Vec<HeapElem<F>>,
@@ -879,7 +825,7 @@ pub struct RunningMem<F: ArkPrimeField> {
     addr_bit_limit: usize,
     sr_bit_limit: usize,
     verifier_mode: bool,
-    ic_cmt: Vec<N2>,
+    ic_cmt: ICCmt,
     // ivc storage
     running_priv_i: F,
     running_pub_i: F,
@@ -967,7 +913,7 @@ impl<F: ArkPrimeField> RunningMem<F> {
         }
 
         // incr cmt = acc cmt
-        for (cmt, acmt) in self.ic_cmt.iter().zip(acc_cmt.iter()) {
+        for (cmt, acmt) in self.ic_cmt.inner().iter().zip(acc_cmt.iter()) {
             assert_eq!(cmt, acmt);
         }
 

@@ -6,7 +6,8 @@ use ark_r1cs_std::{
 };
 use ark_relations::gr1cs::{ConstraintSystemRef, SynthesisError};
 use nova_snark::traits::Engine;
-use rustc_hash::FxHashMap;
+use std::collections::HashMap;
+//use rustc_hash::FxHashMap;
 
 pub trait ArkPrimeField: PrimeField<BigInt = BigInteger256> {}
 impl<P: PrimeField<BigInt = BigInteger256>> ArkPrimeField for P {}
@@ -24,8 +25,8 @@ pub fn logmn(mn: usize) -> usize {
     }
 }
 
-pub fn new_hash_map<K, V>() -> FxHashMap<K, V> {
-    FxHashMap::with_hasher(Default::default())
+pub fn new_hash_map<K, V>() -> HashMap<K, V> {
+    HashMap::new() //FxHashMap::with_hasher(Default::default())
 }
 
 type ShiftPowers<F> = Vec<FpVar<F>>;
