@@ -5,12 +5,19 @@ use ark_r1cs_std::{
     alloc::AllocVar, boolean::Boolean, eq::EqGadget, fields::fp::FpVar, fields::FieldVar,
 };
 use ark_relations::gr1cs::{ConstraintSystemRef, SynthesisError};
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize, Valid};
 use nova_snark::traits::Engine;
 use std::collections::HashMap;
 //use rustc_hash::FxHashMap;
 
-pub trait ArkPrimeField: PrimeField<BigInt = BigInteger256> {}
-impl<P: PrimeField<BigInt = BigInteger256>> ArkPrimeField for P {}
+pub trait ArkPrimeField:
+    PrimeField<BigInt = BigInteger256> + CanonicalSerialize + CanonicalDeserialize + Valid
+{
+}
+impl<P: PrimeField<BigInt = BigInteger256> + CanonicalSerialize + CanonicalDeserialize + Valid>
+    ArkPrimeField for P
+{
+}
 
 // we have to hardcode these, unfortunately
 pub(crate) type E1 = nova_snark::provider::Bn256EngineKZG;
